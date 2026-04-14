@@ -36,7 +36,7 @@ library(patchwork)
 
 ```{r}
 #profiles
-Tutira_Pro <- read.csv(file = "C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira Original Data Files/Tutira_201807-202601_profiles.csv") #
+Tutira_Pro <- read.csv(file = "Tutira_201807-202601_profiles.csv") #
 Tutira_Pro$Lake <- 'Tutira'
 
 Tutira_Pro1<- Tutira_Pro
@@ -60,7 +60,7 @@ Tutira_Pro1 <- Tutira_Pro1 %>%
   filter(Year != 2026)
 
 #meteorological
-Tutira_Met <- read.csv(file = "C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira Original Data Files/Tutira_201807-202601_meteorology.csv") 
+Tutira_Met <- read.csv(file = "Tutira_201807-202601_meteorology.csv") 
 
 Tutira_Met1<- Tutira_Met
 Tutira_Met1$DateTime <- ifelse(
@@ -372,7 +372,7 @@ t.d_Tutira_replace <- t.d_Tutira%>%
   ))
 
 #Schmidt stability
-Tutira_bathy <- "C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira Original Data Files/Tutira_bathy.txt"
+Tutira_bathy <- "Tutira_bathy.txt"
 Tutira.bth = load.bathy(Tutira_bathy)
 S.S_Tutira = ts.schmidt.stability(Tutira.wtr,Tutira.bth, na.rm = FALSE)
 
@@ -527,9 +527,6 @@ Tutira_Cyclone_Pro <- Tutira_data3_replace %>%
     last_during_time  = Tutira_storm$last_during_time[1]
   )%>%
   distinct(datetime, Depth, .keep_all = TRUE) #data has multiple rows with same information (idk why)
-
-#write.csv(Tutira_Cyclone_Pro,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_Cyclone_Pro_Replace_New.csv", row.names = FALSE)
-#write.csv(Tutira_storm,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_storm.csv", row.names = FALSE)
 ```
 
 ## Mean +- 95% Confidence Interval - non normal
@@ -802,8 +799,6 @@ first_recovery <- daily_recovery %>%
 # 7️⃣ Join back to main dataset
 Tutira_MeanCI_Daily_Recovery_Depths <- Tutira_MeanCI_Daily_Recovery_Depths %>%
   left_join(first_recovery, by = "Depth")
-
-#write.csv(Tutira_MeanCI_Daily_Recovery_Depths,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_MeanCI_Daily_Recovery_Depths.csv", row.names = FALSE)
 ```
 
 ### Functional
@@ -887,7 +882,7 @@ first_recovery_clean <- first_recovery %>%
 # Join back to main dataset
 Tutira_MeanCI_Daily_Recovery_ND <- bind_cols(Tutira_MeanCI_Daily_Recovery_ND, first_recovery_clean)
 
-write.csv(Tutira_MeanCI_Daily_Recovery_ND,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_MeanCI_Daily_Recovery_ND.csv", row.names = FALSE)
+write.csv(Tutira_MeanCI_Daily_Recovery_ND,"Tutira_MeanCI_Daily_Recovery_ND.csv", row.names = FALSE)
 ```
 
 ## Resilience and Resistance
@@ -966,7 +961,7 @@ Tutira_D_WT_RLRS <- Tutira_D_WT_RSRL%>%
 Tutira_D_WT_p1 <- Tutira_D_WT%>%
   left_join(Tutira_D_WT_RLRS, by = "Depth")
 
-write.csv(Tutira_D_WT_p1,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_D_WT_p1.csv", row.names = FALSE)
+write.csv(Tutira_D_WT_p1,"Tutira_D_WT_p1.csv", row.names = FALSE)
 ```
 
 ### Functional
@@ -1043,7 +1038,7 @@ Tutira_ND_WT_RLRS <- Tutira_ND_WT_RSRL%>%
 Tutira_ND_WT_p1 <- Tutira_ND_WT%>%
   merge(Tutira_ND_WT_RLRS)
 
-write.csv(Tutira_ND_WT_p1,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_ND_WT_p1.csv", row.names = FALSE)
+write.csv(Tutira_ND_WT_p1,"Tutira_ND_WT_p1.csv", row.names = FALSE)
 ```
 
 ## Rate of Resilience
