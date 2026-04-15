@@ -30,21 +30,31 @@ library(stats)
 library(RColorBrewer)
 library(rlang)
 library(patchwork)
+library(png)
+library(grid)
+library(gridExtra)
+library(ggforce)
+library(ggtext)
 ```
 
 # Data
 
 ```{r}
-#profiles
-Tutira_Pro <- read.csv(file = "C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira Original Data Files/Tutira_201807-202601_profiles.csv") #
-Tutira_Pro$Lake <- 'Tutira'
+#Download Profiling Data from zenodo
+url <- "https://zenodo.org/records/19582360/files/Tutira_201807-202601_profiles.csv?download=1"
 
+download.file(url, destfile = "Tutira_Pro.csv", mode = "wb")
+
+Tutira_Pro <- read.csv("Tutira_Pro.csv")
+
+#Add in 00:00 time when necessary
 Tutira_Pro1<- Tutira_Pro
 Tutira_Pro1$DateTime <- ifelse(
   grepl("^\\d{4}-\\d{2}-\\d{2}$", Tutira_Pro1$DateTime),  # if only date, no time
   paste0(Tutira_Pro1$DateTime, " 00:00:00"),              # add time
   Tutira_Pro1$DateTime                                     # leave as-is
 )
+#format dates
 Tutira_Pro1$Date <- format(as.Date(Tutira_Pro1$DateTime, '%Y-%m-%d', tz= "UTC"), format = '%Y-%m-%d')
 Tutira_Pro1$Date <- as.Date(Tutira_Pro1$Date)
 Tutira_Pro1$Time <- format(as.POSIXct(Tutira_Pro1$DateTime, '%Y-%m-%d %H:%M:%S',tz="UTC"), format = '%H:%M')
@@ -56,18 +66,25 @@ Tutira_Pro1$Datetime <- as.POSIXct(paste(Tutira_Pro1$Date, Tutira_Pro1$Hour),for
 Tutira_Pro1$MD <- as.Date(paste0("2000-", format(as.Date(Tutira_Pro1$Date), "%m-%d")))
 Tutira_Pro1$MDT <- as.POSIXct(paste0("2000-", format(as.POSIXct(Tutira_Pro1$DateTime), "%m-%d %H:%M")),format = "%Y-%m-%d %H:%M",tz = "UTC")
 
+#make sure data ends in 2025
 Tutira_Pro1 <- Tutira_Pro1 %>%
   filter(Year != 2026)
 
-#meteorological
-Tutira_Met <- read.csv(file = "C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira Original Data Files/Tutira_201807-202601_meteorology.csv") 
+#Download Profiling Data from zenodo
+url <- "https://zenodo.org/records/19582360/files/Tutira_201807-202601_meteorology.csv?download=1"
 
+download.file(url, destfile = "Tutira_Met.csv", mode = "wb")
+
+Tutira_Met <- read.csv("Tutira_Met.csv")
+
+#Add in 00:00 time when necessary
 Tutira_Met1<- Tutira_Met
 Tutira_Met1$DateTime <- ifelse(
   grepl("^\\d{4}-\\d{2}-\\d{2}$", Tutira_Met1$DateTime),  # if only date, no time
   paste0(Tutira_Met1$DateTime, " 00:00:00"),              # add time
   Tutira_Met1$DateTime                                     # leave as-is
 )
+#format dates
 Tutira_Met1$Date <- format(as.Date(Tutira_Met1$DateTime, '%Y-%m-%d', tz= "UTC"), format = '%Y-%m-%d')
 Tutira_Met1$Date <- as.Date(Tutira_Met1$Date)
 Tutira_Met1$Time <- format(as.POSIXct(Tutira_Met1$DateTime, '%Y-%m-%d %H:%M:%S',tz="UTC"), format = '%H:%M')
@@ -79,6 +96,7 @@ Tutira_Met1$datetime <- as.POSIXct(paste(Tutira_Met1$Date, Tutira_Met1$Hour),for
 Tutira_Met1$MD <- as.Date(paste0("2000-", format(as.Date(Tutira_Met1$Date), "%m-%d")))
 Tutira_Met1$MDT <- as.POSIXct(paste0("2000-", format(as.POSIXct(Tutira_Met1$DateTime), "%m-%d %H:%M")),format = "%Y-%m-%d %H:%M",tz = "UTC")
 
+#convert wind speed from knots to m/s
 Tutira_Met2 <- Tutira_Met1%>%
   mutate(WndSpd = WndSpd/1.944) %>%#converts from knots to m/s
   filter(Year != 2026)
@@ -87,6 +105,7 @@ Tutira_Met2 <- Tutira_Met1%>%
 ## Profiles
 
 ```{r}
+#averaging depths at meter intervals
 Tutira_Pro2 <- Tutira_Pro1%>%
   mutate(Depth = case_when(
     DptSns <= 0.5 ~ 0,
@@ -131,46 +150,36 @@ Tutira_Pro2 <- Tutira_Pro1%>%
     DptSns > 38.5 & DptSns <=39.5 ~ 39,
     DptSns > 39.5 & DptSns <=40.5 ~ 40
   ))%>%
-  group_by(DateTime,Date,Hour,MD,Month,Year,Lake, Depth, DptSns)%>%
+  group_by(DateTime,Date,Hour,MD,Month,Year,Depth, DptSns)%>%
   #group_by(Datetime, Date, Hour, MD, MDT, Month, Year, Depth)%>%
   dplyr::summarise_at(vars('TmpWtr':'TmpDif'),mean,na.rm=TRUE)%>%
   ungroup()
 
+#creating profiles for new depths
 ok_profiles <- Tutira_Pro2 %>% 
   #filter(!is.na(DateTime))%>%
   arrange(DateTime)%>%
   dplyr::select(DateTime, DptSns, Depth, TmpWtr)
 
-# 2. give every profile a unique id: a new one begins whenever depth == 0
-# ok_profiles <- ok_profiles %>% 
-#   mutate(profile_id = cumsum(Depth <=1))
-
+#creates a profile id
 ok_profiles <- ok_profiles%>%
     mutate(
     new_profile_flag = Depth < lag(Depth, default = first(Depth)),  # TRUE at cast start
-    profile_id       = cumsum(new_profile_flag) + 1                # 1, 2, 3, …
+    profile_id       = cumsum(new_profile_flag) + 1                
   )
 
-# 4. pick one time‑stamp per profile – here: time of the surface reading
-profiles <- ok_profiles %>%
-  group_by(profile_id, Depth) %>%
-  dplyr::summarise(
-    TmpWtr      = mean(TmpWtr, na.rm = TRUE),   # one temperature per depth
-    DateTimeBeg = min(DateTime),                # first tick of that cast
-    .groups = "drop"
-  ) %>%
-  arrange(profile_id, Depth)
-
+#selects first datetime for each profile
 profile_times <- ok_profiles %>% 
   arrange(profile_id, DateTime) %>%          # make sure rows are in order
   group_by(profile_id) %>%                   
   dplyr::summarise(DateTime = first(DateTime),      # or DateTime = min(DateTime)
-            .groups = "drop")                # drop the grouping
+            .groups = "drop")                
 ```
 
 ## Interpolation - 60 days
 
 ```{r}
+#combines profile id to original dataset and updates the Datetime, then fills out data so there are no gaps between dates or depths
 Tutira_interp <- Tutira_Pro2 %>%
   left_join(ok_profiles, by = c('DateTime', 'Depth', 'TmpWtr', 'DptSns')) %>%
   dplyr::select(profile_id, Depth, TmpWtr:FlPhyc) %>%
@@ -222,7 +231,7 @@ Tutira_missing_var <- Tutira_interp_daily %>%
 # Define the variables to interpolate
 vars_to_interp <- c("TmpWtr","DOconc","DOpsat","pH","Cond","SpCond","TurbRT","FlChlr","FlPhyc")
 
-# ----- 1. Hourly interpolation -----
+#Hourly interpolation for 60 days
 #safe_hour_interp <- function(x, datetime, max_gap_hours = 168) { #7 days
 #safe_hour_interp <- function(x, datetime, max_gap_hours = 336) { #14 days
 #safe_hour_interp <- function(x, datetime, max_gap_hours = 744) { #31 days
@@ -259,7 +268,7 @@ Tutira_hourly <- Tutira_interp %>%
                 .names = "{.col}_hourInterp")) %>%
   ungroup()
 
-# ----- 2. Depth-wise interpolation -----
+# Depth-wise interpolation 
 safe_depth_interp <- function(x, depth) {
   if (sum(!is.na(x)) < 2) return(x)  # must have at least 2 values
   # Interpolate across all depths, allow extrapolation
@@ -311,7 +320,7 @@ Tutira_AlgalPeak <- Tutira_interp2 %>%
     Depth_max_FlPhyc = if (all(is.na(FlPhyc))) NA_real_ else Depth[which.max(FlPhyc)] ) %>% 
   ungroup()
 
-#adding in anoxic depth
+#adding in hypoxic depth
 Tutira_Anoxic <- Tutira_interp2 %>%
   group_by(datetime) %>%
   mutate(
@@ -338,19 +347,19 @@ Tutira_ProfileWide <- Tutira_interp2 %>%
 ## rlakeanalyzer
 
 ```{r}
-#changing format of temperature file, so I don't have to save it everytime I have more data
+#changing format of temperature file
 ok_wide_iso <- Tutira_ProfileWide %>%
   mutate(datetime = format(datetime, "%Y-%m-%dT%H:%M:%SZ"))
 
-# Step 2: Convert to character matrix for full control
+#Convert to character matrix for full control
 char_mat <- apply(ok_wide_iso, 2, as.character)
 
-# Step 3: Build tab-separated lines manually
+#Build tab-separated lines manually
 header <- paste(colnames(ok_wide_iso), collapse = "\t")
 rows <- apply(char_mat, 1, function(x) paste(x, collapse = "\t"))
 txt_lines <- c(header, rows)
 
-# Step 4: Feed to load.ts() via in-memory text connection
+#Feed to load.ts() via in-memory text connection
 con <- textConnection(txt_lines, "r")
 Tutira.wtr <- load.ts(con)
 close(con)
@@ -363,20 +372,29 @@ Tutira.wtr$datetime <- as.POSIXct(
 
 str(Tutira.wtr)
 #Find other parameters in rLakeAnalyzer
-t.d_Tutira = ts.thermo.depth(Tutira.wtr) ## pulls out calculated thermocline depth
+t.d_Tutira = ts.thermo.depth(Tutira.wtr) # pulls out calculated thermocline depth
 
+#replaces NA values with bottom depth of lake
 t.d_Tutira_replace <- t.d_Tutira%>%
   mutate(across(
-    where(is.numeric),               # only numeric columns can hold NaN
-    ~ replace(.x, is.nan(.x), 38)    # swap NaN → 29
+    where(is.numeric),               
+    ~ replace(.x, is.nan(.x), 38)    
   ))
 
-#Schmidt stability
-Tutira_bathy <- "C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira Original Data Files/Tutira_bathy.txt"
+#upload bathy data
+#Download Profiling Data from zenodo
+url <- "https://zenodo.org/records/19582360/files/Tutira_bathy.txt?download=1"
+
+download.file(url, destfile = "Tutira_bathy.txt", mode = "wb")
+
+Tutira_bathy <- "Tutira_bathy.txt"
+
+#change to correct format for rlakeanalyzer
 Tutira.bth = load.bathy(Tutira_bathy)
+#calculate schmidt stability
 S.S_Tutira = ts.schmidt.stability(Tutira.wtr,Tutira.bth, na.rm = FALSE)
 
-#Lake Number
+#formating wind data
 Tutira_Wnd <- Tutira_Met2%>%
   dplyr::select(c(datetime, WndSpd))%>%
   group_by(datetime)%>%
@@ -388,15 +406,15 @@ Tutira_Wnd <- Tutira_Met2%>%
 Tutira_wnd_1 <- Tutira_Wnd %>%
   mutate(datetime = format(datetime, "%Y-%m-%dT%H:%M:%SZ"))
 
-# Step 2: Convert to character matrix for full control
+#Convert to character matrix for full control
 char_mat <- apply(Tutira_wnd_1, 2, as.character)
 
-# Step 3: Build tab-separated lines manually
+#Build tab-separated lines manually
 header <- paste(colnames(Tutira_wnd_1), collapse = "\t")
 rows <- apply(char_mat, 1, function(x) paste(x, collapse = "\t"))
 txt_lines <- c(header, rows)
 
-# Step 4: Feed to load.ts() via in-memory text connection
+#Feed to load.ts() via in-memory text connection
 con <- textConnection(txt_lines, "r")
 Tutira.wnd <- load.ts(con)
 close(con)
@@ -406,7 +424,7 @@ Tutira.wnd$datetime <- as.POSIXct(
   format = "%Y-%m-%dT%H:%M:%SZ",
   tz = "UTC"
 )
-
+#calculate lake number
 Tutira_LN <- ts.lake.number(Tutira.wtr,Tutira.wnd,2,Tutira.bth,seasonal=TRUE)
 
 #Metalimion depths
@@ -449,7 +467,7 @@ Tutira_data3 <- Tutira_AlgalPeak%>%
   left_join(Tutira_MD, by = 'datetime', relationship = "many-to-one")%>%
   left_join(Tutira_BF, by = 'datetime', relationship = "many-to-one")
 
-#replacing
+#replacing na values with 0
 Tutira_LN1 <- Tutira_LN%>%
   mutate(lake.number = coalesce(lake.number, 0))
 
@@ -485,7 +503,7 @@ Tutira_data3_replace <- Tutira_AlgalPeak %>%
 ## Storm identification
 
 ```{r}
-#Tutira
+#determining dates of cyclone Gabrielle
 Tutira_storm <- Tutira_Met2 %>%
   arrange(DateTime) %>%
   mutate(
@@ -527,9 +545,6 @@ Tutira_Cyclone_Pro <- Tutira_data3_replace %>%
     last_during_time  = Tutira_storm$last_during_time[1]
   )%>%
   distinct(datetime, Depth, .keep_all = TRUE) #data has multiple rows with same information (idk why)
-
-#write.csv(Tutira_Cyclone_Pro,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_Cyclone_Pro_Replace_New.csv", row.names = FALSE)
-#write.csv(Tutira_storm,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_storm.csv", row.names = FALSE)
 ```
 
 ## Mean +- 95% Confidence Interval - non normal
@@ -572,12 +587,12 @@ Tutira_filled_Depth <- expand_grid(
   )
 
 # -----------------------------
-# 3. Define target variables
+# 4. Define target variables
 # -----------------------------
 set.seed(123)  # for reproducibility
 
 # 1️⃣ Pivot longer to make variables in one column
-# Long data (yours)
+# Long data 
 Tutira_long <- Tutira_filled_Depth %>%
   pivot_longer(
     cols = c(TmpWtr, DOconc, DOpsat, pH, Cond, SpCond, TurbRT, FlChlr, FlPhyc),
@@ -585,7 +600,7 @@ Tutira_long <- Tutira_filled_Depth %>%
     values_to = "Value"
   )
 
-# Bootstrap function (safe)
+# Bootstrap function 
 bootstrap_ci <- function(x, nboot = 1000, conf = 0.95) {
   x <- na.omit(x)
   if (length(x) < 2) {
@@ -669,7 +684,7 @@ Tutira_filled_ND <- expand_grid(
   )
 
 # -----------------------------
-# 3. Define target variables
+# 4. Define target variables
 # -----------------------------
 set.seed(123)  # for reproducibility
 
@@ -682,7 +697,7 @@ Tutira_long_ND <- Tutira_filled_ND %>%
     values_to = "Value"
   )
 
-# Bootstrap function (safe)
+# Bootstrap function
 bootstrap_ci <- function(x, nboot = 1000, conf = 0.95) {
   x <- na.omit(x)
   if (length(x) < 2) {
@@ -734,23 +749,23 @@ Tutira_full_ND <- Tutira_full_ND %>%
 ### Structural
 
 ```{r}
-# 1️⃣Rename
+# Rename
 Tutira_MeanCI_Daily_Recovery_Depths <- Tutira_full_Depth
 
-# 2️⃣ Target variables
+# Target variables
 vars <- c("TmpWtr", "DOconc", "DOpsat", "pH",
           "Cond", "SpCond", "TurbRT", "FlChlr", "FlPhyc")
 
-# 3️⃣ Filter to post-storm period
+# Filter to post-storm period
 start_time <- min(as.Date(Tutira_MeanCI_Daily_Recovery_Depths$last_during_time), na.rm = TRUE)
 
 df_check <- Tutira_MeanCI_Daily_Recovery_Depths %>%
   filter(Date >= start_time)
 
-# 3 Get max thermo.depth value from the non-depth dataset
+# Get max thermo.depth value from the non-depth dataset
 max_thermo <- max(Tutira_full_ND$thermo.depth, na.rm = TRUE)
 
-# 4 Create recovered columns based on 95% CI, with thermo rule applied
+# Create recovered columns based on 95% CI, with thermo rule applied
 for (v in vars) {
   recovered <- df_check[[v]] >= df_check[[paste0(v, "_lower")]] &
                df_check[[v]] <= df_check[[paste0(v, "_upper")]]
@@ -770,7 +785,7 @@ for (v in vars) {
   df_check[[paste0("recovered_", v)]] <- recovered
 }
 
-# 5️⃣ Rolling 2-day check
+# Rolling 2-day check
 daily_recovery <- df_check %>%
   group_by(Depth) %>%
   arrange(Date, .by_group = TRUE) %>%
@@ -783,7 +798,7 @@ daily_recovery <- df_check %>%
   ) %>%
   ungroup()
 
-# 6️⃣ First recovery date per Depth × Variable
+# First recovery date per Depth × Variable
 first_recovery <- daily_recovery %>%
   pivot_longer(
     cols = ends_with("_2days"),
@@ -799,11 +814,9 @@ first_recovery <- daily_recovery %>%
   mutate(variable = sub("_2days$", "", variable), variable = sub("^recovered_", "", variable))%>%
   pivot_wider(names_from = variable, values_from = recovery_date, names_prefix = "first_recovery_")
 
-# 7️⃣ Join back to main dataset
+# Join back to main dataset
 Tutira_MeanCI_Daily_Recovery_Depths <- Tutira_MeanCI_Daily_Recovery_Depths %>%
   left_join(first_recovery, by = "Depth")
-
-#write.csv(Tutira_MeanCI_Daily_Recovery_Depths,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_MeanCI_Daily_Recovery_Depths.csv", row.names = FALSE)
 ```
 
 ### Functional
@@ -850,7 +863,6 @@ for (v in vars) {
 }
   
 daily_recovery <- df_check %>%
-  #group_by(Depth) %>%                # or group_by(Depth) if needed
   arrange(Date, .by_group = TRUE) %>%
   mutate(
     across(
@@ -886,8 +898,6 @@ first_recovery_clean <- first_recovery %>%
 
 # Join back to main dataset
 Tutira_MeanCI_Daily_Recovery_ND <- bind_cols(Tutira_MeanCI_Daily_Recovery_ND, first_recovery_clean)
-
-write.csv(Tutira_MeanCI_Daily_Recovery_ND,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_MeanCI_Daily_Recovery_ND.csv", row.names = FALSE)
 ```
 
 ## Resilience and Resistance
@@ -895,11 +905,12 @@ write.csv(Tutira_MeanCI_Daily_Recovery_ND,"C:/Users/mah92/OneDrive - The Univers
 ### Structural
 
 ```{r}
+#rename
 Tutira_D_WT <- Tutira_MeanCI_Daily_Recovery_Depths
 
 vars <- c("TmpWtr", "DOconc", "DOpsat", "pH", "FlChlr", "FlPhyc", "Cond", "SpCond", "TurbRT")
 
-#resistance
+#resistance (RS)
 #pulls out maximum disturbance values per depth
 Tutira_D_WT_during <- Tutira_D_WT %>%
   filter(Date >= first_during_time & Date <= last_during_time) %>%
@@ -934,7 +945,7 @@ Tutira_D_WT_RL <- bind_rows(
 
     # select relevant columns
     Tutira_D_WT %>%
-      select(Depth, Date, all_of(var), all_of(paste0(var, "_mean"))) %>%
+      dplyr::select(Depth, Date, all_of(var), all_of(paste0(var, "_mean"))) %>%
       rename(Value = all_of(var),
              MeanValue = all_of(paste0(var, "_mean"))) %>%
       filter(Date >= recovery_time - hours(72) &
@@ -956,7 +967,7 @@ Tutira_D_WT_RL <- bind_rows(
 Tutira_D_WT_RSRL <- Tutira_D_WT_RS%>%
   left_join(Tutira_D_WT_RL %>% dplyr::select(c(Depth, Variable, Px, Cx, tx, Dx)), by = c("Depth", "Variable"))
 
-#calculates RL
+#calculates resilience (RL)
 Tutira_D_WT_RLRS <- Tutira_D_WT_RSRL%>%
   group_by(Depth, Variable)%>%
   mutate(RL = (((2*abs(D0))/(abs(Dx) + abs(D0)))-1),
@@ -965,19 +976,19 @@ Tutira_D_WT_RLRS <- Tutira_D_WT_RSRL%>%
 #merges datasets with RS and RL
 Tutira_D_WT_p1 <- Tutira_D_WT%>%
   left_join(Tutira_D_WT_RLRS, by = "Depth")
-
-write.csv(Tutira_D_WT_p1,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_D_WT_p1.csv", row.names = FALSE)
 ```
 
 ### Functional
 
 ```{r}
+#rename
 Tutira_ND_WT <- Tutira_MeanCI_Daily_Recovery_ND
 
+#define variables
 vars <- c("Depth_max_FlChlr", "Depth_max_FlPhyc", "Anoxic_Depth", "thermo.depth",
           "schmidt.stability", "lake.number", "Meta_Top", "Meta_Bottom", "Buoyancy")
 
-#resistance
+#resistance (RS)
 #pulls out maximum disturbance values per depth
 Tutira_ND_WT_during <- Tutira_ND_WT %>%
   filter(Date >= first_during_time & Date <= last_during_time) %>%
@@ -1033,7 +1044,7 @@ Tutira_ND_WT_RL <- bind_rows(
 Tutira_ND_WT_RSRL <- Tutira_ND_WT_RS%>%
   left_join(Tutira_ND_WT_RL %>% dplyr::select(c(Variable, Px, Cx, tx, Dx)), by = c("Variable"))
 
-#calculates RL
+#calculates Resilience (RL)
 Tutira_ND_WT_RLRS <- Tutira_ND_WT_RSRL%>%
   group_by(Variable)%>%
   mutate(RL = ((2*abs(D0))/(abs(Dx) + abs(D0)))-1,
@@ -1042,8 +1053,6 @@ Tutira_ND_WT_RLRS <- Tutira_ND_WT_RSRL%>%
 #merges datasets with RS and RL
 Tutira_ND_WT_p1 <- Tutira_ND_WT%>%
   merge(Tutira_ND_WT_RLRS)
-
-write.csv(Tutira_ND_WT_p1,"C:/Users/mah92/OneDrive - The University of Waikato/Desktop/Project 1/Data/Tutira_ND_WT_p1.csv", row.names = FALSE)
 ```
 
 ## Rate of Resilience
@@ -1051,6 +1060,7 @@ write.csv(Tutira_ND_WT_p1,"C:/Users/mah92/OneDrive - The University of Waikato/D
 ### Structural
 
 ```{r}
+#define variables
 vars <- c("TmpWtr", "DOconc", "DOpsat", "pH", "FlChlr", "FlPhyc", "Cond", "SpCond", "TurbRT")
 
 # daily rate of resilience for each variable and depth
@@ -1067,7 +1077,6 @@ Tutira_D_WT_RR_daily <- bind_rows(
 
     # Merge observed + baseline for this variable
     df <- Tutira_D_WT %>%
-      filter(Date >= last_during_time) %>%
       dplyr::select(Depth, Date, all_of(var), all_of(paste0(var, "_mean"))) %>%
       rename(Value = all_of(var),
              MeanValue = all_of(paste0(var, "_mean"))) %>%
@@ -1075,11 +1084,7 @@ Tutira_D_WT_RR_daily <- bind_rows(
         Variable = var,
         Dd = Value - MeanValue
       ) %>%
-      left_join(depth_recovery, by = "Depth") %>%
-      mutate(
-        end_time = recovery_time + hours(72)
-      ) %>%
-      filter(Date <= end_time)
+      left_join(depth_recovery, by = "Depth")
 
     # Add t0 and D0
     df <- df %>%
@@ -1097,6 +1102,8 @@ Tutira_D_WT_RR_daily <- bind_rows(
       )
   })
 )
+
+Tutira_D_WT_RR_daily$Year <- format(as.POSIXct(Tutira_D_WT_RR_daily$Date, '%Y-%m-%d',tz="UTC"), format = '%Y')
 ```
 
 ### Functional
@@ -1120,8 +1127,6 @@ Tutira_ND_WT_RR_daily <- bind_rows(
 
     # observed + baseline series
     df <- Tutira_ND_WT %>%
-      filter(Date >= last_during_time &
-             Date <= recovery_time + hours(72)) %>%     # recovery window
       dplyr::select(Date, all_of(var), all_of(paste0(var, "_mean"))) %>%
       rename(
         Value = all_of(var),
@@ -1141,58 +1146,2794 @@ Tutira_ND_WT_RR_daily <- bind_rows(
     df
   })
 )
+
+Tutira_ND_WT_RR_daily$Year <- format(as.POSIXct(Tutira_ND_WT_RR_daily$Date, '%Y-%m-%d',tz="UTC"), format = '%Y')
 ```
 
-## Rate of Resilience - till end of data
+# Graphing
 
-### Structural
+## Figure 2
+
+-   Conceptual Figure
 
 ```{r}
-vars <- c("TmpWtr", "DOconc", "DOpsat", "pH", "FlChlr", "FlPhyc", "Cond", "SpCond", "TurbRT")
-
-# daily rate of resilience for each variable and depth
-Tutira_D_WT_RR_daily_all <- bind_rows(
-  lapply(vars, function(var) {
-    
-    recovery_col <- paste0("first_recovery_", var)
-
-    # extract recovery times per depth (a tibble)
-    depth_recovery <- Tutira_D_WT %>% 
-      dplyr::select(Depth, !!recovery_col) %>%
-      distinct() %>%
-      rename(recovery_time = !!recovery_col)
-
-    # Merge observed + baseline for this variable
-    df <- Tutira_D_WT %>%
-      filter(Date >= last_during_time) %>%
-      dplyr::select(Depth, Date, all_of(var), all_of(paste0(var, "_mean"))) %>%
-      rename(Value = all_of(var),
-             MeanValue = all_of(paste0(var, "_mean"))) %>%
-      mutate(
-        Variable = var,
-        Dd = Value - MeanValue
-      ) %>%
-      left_join(depth_recovery, by = "Depth")
-      #mutate(end_time = recovery_time + hours(72)) %>%
-      #filter(Date <= end_time)
-
-    # Add t0 and D0
-    df <- df %>%
-      left_join(
-        Tutira_D_WT_during %>% 
-          dplyr::select(Depth, Variable, t0, D0),
-        by = c("Depth", "Variable")
-      )
-
-    # RL for each day
-    df %>%
-      mutate(
-        RL_daily = ((2 * abs(D0)) / (abs(Dd) + abs(D0))) - 1,
-        day_since_disturbance = as.numeric(Date - t0, units = "days")
-      )
-  })
+concept_ts <- data.frame(
+  time = 1:27,
+  value = c(
+    rep(1, 5),          # baseline
+    1.6, 1.8, 1.95, 2.0, 1.98,     # storm impact
+    1.8, 1.5,           # early recovery
+    1.3, 1.15, 1.05, 1.03,   # recovery
+    rep(1, 4),           # recovered
+    1.03, 1.15, 1.30, 1.27, 1.15, 1.05, 1
+  )
 )
 
-Tutira_D_WT_RR_daily_all$MD <- as.Date(paste0("2000-", format(as.Date(Tutira_D_WT_RR_daily_all$Date), "%m-%d")))
-Tutira_D_WT_RR_daily_all$Year <- format(as.POSIXct(Tutira_D_WT_RR_daily_all$Date, '%Y-%m-%d',tz="UTC"), format = '%Y')
+storm_start <- 5
+storm_end   <- 10
+recovery_end <- 16
+recovery_end_2 <- 27
+baseline <- 1
+ci_width  <- 0.1  # half-width of 95% CI
+x_arrow <- 9
+y_start <- 1.05
+y_end   <- 1.9
+y_mid   <- (y_start + y_end) / 2  # middle point
+
+#center points of boxes
+mid_x_S<- storm_start + (storm_end - storm_start) / 2
+mid_x_R <- storm_end + (recovery_end - storm_end) / 2
+mid_x_R2 <- recovery_end + (recovery_end_2 - recovery_end) / 2
+mid_x_RL <- storm_end + (recovery_end_2 - storm_end) / 2
+
+conceptual <- ggplot(concept_ts, aes(time, value)) +
+
+  # Storm period shading
+  annotate(
+    "rect",
+    xmin = storm_start,
+    xmax = storm_end,
+    ymin = -Inf,
+    ymax = Inf,
+    fill = '#66C2C7',
+    alpha = 0.2
+  ) +
+  
+  # Recovery shading
+  annotate(
+    "rect",
+    xmin = storm_end,
+    xmax = recovery_end,
+    ymin = -Inf,
+    ymax = Inf,
+    fill = '#196F3D',
+    alpha = 0.2
+  ) +
+  
+  #Long-term Recovery
+  annotate(
+    "rect",
+    xmin = recovery_end,
+    xmax = recovery_end_2,
+    ymin = -Inf,
+    ymax = Inf,
+    fill = '#003B19',
+    alpha = 0.2
+  ) +
+  
+   # 95% CI ribbon
+  geom_ribbon(
+    aes(ymin = baseline - ci_width, ymax = baseline + ci_width),
+    fill = '#BDC3C7',
+    alpha = 0.5
+  ) +
+
+  # Baseline
+  geom_hline(
+    yintercept = 1,
+    linetype = "dashed",
+    color = "black"
+  ) +
+
+  # System response line
+  geom_line(linewidth = 1, color = "#7B9E4C") +
+  #geom_point(size = 2) +
+
+  # Resistance arrow
+  # annotate(
+  #   "segment",
+  #   x = 9, xend = 9,
+  #   y = 1, yend = 1.95,
+  #   arrow = arrow(length = unit(0.2, "cm"))
+  # ) +
+  annotate(
+    "segment",
+    x = x_arrow, xend = x_arrow,
+    yend = y_start + 0.02, y = y_mid - 0.1,  # leave small gap for text
+    arrow = arrow(length = unit(0.2, "cm"))
+  ) +
+  # Second half of arrow
+  annotate(
+    "segment",
+    x = x_arrow, xend = x_arrow,
+    y = y_mid + 0.1, yend = y_end,
+    arrow = arrow(length = unit(0.2, "cm"))
+  ) +
+  # Text in the middle
+  annotate(
+    "text",
+    x = x_arrow,
+    y = y_mid,
+    label =  "D[0]",
+    parse = TRUE,
+    fontface = "bold",
+    vjust = 0.5, size = 3.5
+  ) +
+  annotate(
+    "text",
+    x = 9,
+    y = 2.8,
+    label = "Resistance",
+    color = '#842A11'
+  ) +
+  annotate(
+    "text",
+    x = 9,
+    y = 2.55,
+    label = "D[0] == V[0] - B[0]",
+    parse = TRUE,
+    color = '#842A11'
+  ) +
+  geom_point(aes(x = 9, y = 2), color = "black", size = 2)+
+  # Dashed rectangle around point + arrow + text
+annotate(
+  "rect",
+  xmin = 8.5, xmax = 9.5,   # horizontal span
+  ymin = 0.65, ymax = 2.4,   # vertical span
+  color = "#842A11",           # border color
+  linetype = "dashed",       # dashed border
+  fill = NA,                 # no fill
+  linewidth = 0.7
+)+
+  annotate(
+    "text",
+    x = 9,
+    y = 0.8,
+    label =  "B[0]",
+    parse = TRUE, size = 3.5
+  ) +
+  annotate(
+    "text",
+    x = 9,
+    y = 2.2,
+    label =  "V[0]",
+    parse = TRUE, size = 3.5
+  ) +
+
+  # Recovery arrow
+  # annotate(
+  #   "segment",
+  #   x = storm_end,
+  #   xend = recovery_end,
+  #   y = 0.9,
+  #   yend = 0.9,
+  #   arrow = arrow(length = unit(0.2, "cm"))
+  # ) +
+  annotate(
+    "text",
+    x = mid_x_R,
+    y = 3.2,
+    label = "Recovery \nPeriod",
+    fontface = "bold"
+  ) +
+  annotate(
+    "text",
+    x = mid_x_R2,
+    y = 3.2,
+    label = "Long - Term\nRecovery Period",
+    fontface = "bold"
+  ) +
+  geom_point(aes(x = 16, y = 1.03), color = "#674A84", size = 3)+
+  annotate(
+    "text",
+    x = 16,
+    y = 1.8,
+    label = "Initial\nRecovery",
+    color = '#674A84'
+  ) +
+
+  # Labels
+  annotate(
+    "text",
+    x = mid_x_S,
+    #y = max(concept_ts$value) + 0.1,
+    y = 3.2,
+    label = "Storm\nPeriod",
+    fontface = "bold"
+  ) +
+  #resilience
+  #points
+  geom_point(aes(x = 10, y = 1.98), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 11, y = 1.8), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 12, y = 1.5), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 13, y = 1.3), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 14, y = 1.15), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 15, y = 1.05), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 16, y = 1.03), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 17, y = 1), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 18, y = 1), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 19, y = 1), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 20, y = 1), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 21, y = 1.03), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 22, y = 1.15), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 23, y = 1.30), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 24, y = 1.27), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 25, y = 1.15), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 26, y = 1.05), shape = 1, size = 2, color = '#594F3B') +
+  geom_point(aes(x = 27, y = 1), shape = 1, size = 2, color = '#594F3B') +
+  #baseline labels
+  annotate("text", x = 10, y = 0.8, label =  "B[t]", parse = TRUE, color = '#594F3B', size = 3.5) +
+  # annotate("text", x = 11, y = 0.95, label =  "C[2]", parse = TRUE) +
+  # annotate("text", x = 12, y = 0.95, label =  "C[3]", parse = TRUE) +
+  # annotate("text", x = 13, y = 0.95, label =  "C[4]", parse = TRUE) +
+  # annotate("text", x = 14, y = 0.95, label =  "C[5]", parse = TRUE) +
+  # annotate("text", x = 15, y = 0.95, label =  "C[6]", parse = TRUE) +
+  annotate("text", x = 16, y = 0.8, label =  "B[t]", parse = TRUE, color = '#594F3B', size = 3.5) +
+  annotate("text", x = 27, y = 0.8, label =  "B[t]", parse = TRUE, color = '#594F3B', size = 3.5) +
+  #actual value labels
+  annotate("text", x = 10, y = 2.16, label =  "V[t]", parse = TRUE, color = '#594F3B', size = 3.5) +
+  # annotate("text", x = 11, y = 1.86, label =  "P[2]", parse = TRUE, hjust = 0.3) +
+  # annotate("text", x = 12, y = 1.56, label =  "P[3]", parse = TRUE, hjust = 0) +
+  # annotate("text", x = 13, y = 1.36, label =  "P[4]", parse = TRUE, hjust = 0.2) +
+  # annotate("text", x = 14, y = 1.21, label =  "P[5]", parse = TRUE, hjust = 0.5) +
+  # annotate("text", x = 15, y = 1.11, label =  "P[6]", parse = TRUE) +
+  annotate("text", x = 16, y = 1.23, label =  "V[t]", parse = TRUE, color = '#594F3B', size = 3.5) +
+  annotate("text", x = 27, y = 1.2, label =  "V[t]", parse = TRUE, color = '#594F3B', size = 3.5) +
+  annotate(
+    "text",
+    x = mid_x_RL,
+    y = 2.8,
+    label = "Resilience",
+   # hjust = 0,
+    color = '#D57124'
+  ) +
+  annotate(
+    "text",
+    x = mid_x_RL,
+    y = 2.55,
+    label = "D[t] == V[t] - B[t]",
+    #hjust = 0,
+    parse = TRUE,
+    color = '#D57124'
+  ) +
+  geom_point(aes(x = 9, y = 2), color = "black", size = 3)+
+  # Dashed rectangle around point + arrow + text
+annotate(
+  "rect",
+  xmin = 9.5, xmax = 27.8,   # horizontal span
+  ymin = 0.65, ymax = 2.4,   # vertical span
+  color = '#D57124',           # border color
+  linetype = "dashed",       # dashed border
+  fill = NA,                 # no fill
+  linewidth = 0.7            # optional border thickness
+)+
+  
+  labs(
+    x = "Day",
+    y = "Lake Value"
+  ) +
+  scale_x_continuous(breaks = c(0,2,4,6,8,10,12,14,16,18,20,22,24,26))+
+  scale_y_continuous(limits = c(0.5, 3.5), breaks = c(1, 2, 3))+
+
+  theme_pubr() +
+  theme(
+    panel.grid = element_blank()
+  )
+conceptual
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Conceptual_new.png",
+#   plot = conceptual,
+#   width = 6, #14
+#   height = 3, #7
+#   dpi = 300
+# )
+```
+
+## Figure 3
+
+-   storm identification
+
+```{r}
+# pull start/end into simple scalars
+Tutira_first_time <- Tutira_storm$first_during_time
+Tutira_last_time  <- Tutira_storm$last_during_time
+
+#barometric pressure
+BP <- ggplot(data = Tutira_storm, aes(x = datetime, y = PrBaro))+
+  geom_rect(aes(xmin = Tutira_first_time, xmax = Tutira_last_time, ymin = -Inf, ymax = Inf),
+            fill = "#BDBDBD", alpha = 0.2) +
+  #geom_line(color = "#7B9E4C")+
+  geom_line(color = "black")+
+  ylab('Barometric Pressure\n(hPa)')+
+  xlab(NULL)+
+  geom_vline(xintercept = as.numeric(Tutira_first_time), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = as.numeric(Tutira_last_time), linetype = "dashed", color = "black") +
+  #geom_hline(yintercept = unique(Tutira_storm$PrBaro_10th), linetype = 'solid', color = 'black') +
+  #scale_x_datetime(breaks = "1 week", labels = date_format("%b %d")) +
+  scale_x_datetime(breaks = "1 week", labels = NULL) +
+  theme_pubr()
+  # theme(
+  #   axis.title.x = element_text(face = "bold"),
+  #   axis.title.y = element_text(face = "bold"),
+  #   axis.text.x  = element_text(face = "bold"),
+  #   axis.text.y  = element_text(face = "bold")
+  # )
+BP
+
+#wind speed
+WS<-ggplot(data = Tutira_storm, aes(x = datetime, y = WndSpd))+
+  geom_rect(aes(xmin = Tutira_first_time, xmax = Tutira_last_time, ymin = -Inf, ymax = Inf),
+            fill = "#BDBDBD", alpha = 0.2) +
+  geom_line(color = "black")+
+  ylab('Wind Speed\n(m/s)')+
+  xlab(NULL)+
+  geom_vline(xintercept = as.numeric(Tutira_first_time), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = as.numeric(Tutira_last_time), linetype = "dashed", color = "black") +
+  #geom_hline(yintercept = unique(Tutira_storm$WS_90th), linetype = 'solid', color = 'black') +
+  #scale_x_datetime(breaks = "1 week", labels = date_format("%b %d")) +
+  scale_x_datetime(breaks = "1 week", labels = NULL) +
+  theme_pubr()
+  # theme(
+  #   axis.title.x = element_text(face = "bold"),
+  #   axis.title.y = element_text(face = "bold"),
+  #   axis.text.x  = element_text(face = "bold"),
+  #   axis.text.y  = element_text(face = "bold")
+  # )
+WS
+
+#rainfall
+R<-ggplot(data = Tutira_storm, aes(x = datetime, y = PpRain))+
+  geom_rect(aes(xmin = Tutira_first_time, xmax = Tutira_last_time, ymin = -Inf, ymax = Inf),
+            fill = "#BDBDBD", alpha = 0.2) +
+  geom_col(color = "black") +
+  ylab('Precipitation\n(mm)')+
+  xlab(NULL)+
+  geom_vline(xintercept = as.numeric(Tutira_first_time), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = as.numeric(Tutira_last_time), linetype = "dashed", color = "black") +
+  scale_x_datetime(breaks = "1 week", labels = date_format("%b %d")) +
+  theme_pubr()
+  # theme(
+  #   axis.title.x = element_text(face = "bold"),
+  #   axis.title.y = element_text(face = "bold"),
+  #   axis.text.x  = element_text(face = "bold"),
+  #   axis.text.y  = element_text(face = "bold")
+  # )
+R
+
+Tutira_Cyclone_patch <-
+  (BP / WS / R) +
+  plot_layout(heights = c(1, 1, 1)) &
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.spacing = unit(0, "lines")
+  )&
+  plot_annotation(
+     tag_levels = "A")#&
+  # theme(
+  #   plot.tag.position = c(0.13, 0.95)#,
+  #   #plot.tag = element_text(face = "bold")
+  # )
+Tutira_Cyclone_patch
+
+#saving
+# ggsave(
+#   filename = "Draft Paper Graphs/Tutira_Cyclone_Gabrielle.png",
+#   plot = Tutira_Cyclone_patch,
+#   width = 5, #14
+#   height = 6, #7
+#   dpi = 300
+# )
+```
+
+## Figure 4
+
+-   Heatmaps
+
+```{r}
+# -------------------------------
+# Function to create load.ts objects
+# -------------------------------
+make_wtr_object <- function(data, var, prefix) {
+  df <- data %>%
+    filter(datetime >= '2022-07-01 00:00:00' &
+           datetime <= '2023-07-31 23:00:00') %>%
+    select(datetime, Depth, all_of(var)) %>%
+    pivot_wider(
+      names_from = Depth,
+      names_prefix = prefix,
+      names_sort = TRUE,
+      values_from = all_of(var)
+    ) %>%
+    drop_na()
+
+  df_fmt <- df %>%
+    mutate(datetime = format(datetime, "%Y-%m-%dT%H:%M:%SZ"))
+
+  char_mat <- apply(df_fmt, 2, as.character)
+  header <- paste(colnames(df_fmt), collapse = "\t")
+  rows <- apply(char_mat, 1, function(x) paste(x, collapse = "\t"))
+  txt_lines <- c(header, rows)
+
+  con <- textConnection(txt_lines, "r")
+  out <- load.ts(con)
+  close(con)
+
+  out$datetime <- as.POSIXct(
+    format(df$datetime, "%Y-%m-%dT%H:%M:%SZ"),
+    format = "%Y-%m-%dT%H:%M:%SZ",
+    tz = "UTC"
+  )
+
+  return(out)
+}
+
+# -------------------------------
+# Create load.ts objects
+# -------------------------------
+Tutira.wtr  <- make_wtr_object(Tutira_interp2, "TmpWtr", "wtr_")
+Tutira.DO   <- make_wtr_object(Tutira_interp2, "DOconc", "DO_")
+Tutira.C    <- make_wtr_object(Tutira_interp2, "FlChlr", "C_")
+Tutira.Phy  <- make_wtr_object(Tutira_interp2, "FlPhyc", "Phy_")
+Tutira.Turb <- make_wtr_object(Tutira_interp2, "TurbRT", "Turb_")
+
+# -------------------------------
+# Function to save heatmaps with bigger text
+# -------------------------------
+save_heatmap <- function(obj, filename, title = NULL) {
+  png(filename, width = 2400, height = 1200, res = 300)
+  
+  # Increase text sizes
+  par(mar = c(4, 5, 3, 5),      # margins (bottom, left, top, right)
+      cex.axis = 1.5,           # tick labels
+      cex.lab  = 1.5,           # x/y axis labels
+      cex.main = 1.5,             # main title
+      col.main = '#452D7A')     # title color
+  
+  wtr.heat.map(obj, main = "")
+  
+  if (!is.null(title)) {
+    # Split title so parentheses go on new line
+    title_split <- gsub(" \\(", "\n(", title)
+    
+    title(main = title_split, adj = 0,
+          col.main = '#452D7A', cex.main = 1.5)
+  }
+  
+  dev.off()
+}
+
+# -------------------------------
+# Save each heatmap
+# -------------------------------
+save_heatmap(Tutira.wtr,  "Graphs/heatmaps_temp.png", "Water Temperature (°C)")
+save_heatmap(Tutira.DO,   "Graphs/heatmaps_do.png", "Dissolved Oxygen (mg/L)")
+save_heatmap(Tutira.C,    "Graphs/heatmaps_chl.png", "Chlorophyll-a (RFU)")
+save_heatmap(Tutira.Phy,  "Graphs/heatmaps_phyco.png", "Phycocyanin (RFU)")
+save_heatmap(Tutira.Turb, "Graphs/heatmaps_turb.png", "Turbidity (NTU)")
+
+#upload heatmaps
+img1 <- rasterGrob(readPNG("Graphs/heatmaps_temp.png"))
+img2 <- rasterGrob(readPNG("Graphs/heatmaps_do.png"))
+img3 <- rasterGrob(readPNG("Graphs/heatmaps_chl.png"))
+img4 <- rasterGrob(readPNG("Graphs/heatmaps_phyco.png"))
+img5 <- rasterGrob(readPNG("Graphs/heatmaps_turb.png"))
+
+#new
+blank <- rectGrob(gp = gpar(col = NA, fill = NA))
+
+# Layout matrix
+layout_mat <- rbind(
+  c(1, 2),
+  c(3, 4),
+  c(5, 6)
+)
+
+# Create the arranged grob
+combined <- arrangeGrob(
+  img1, blank,
+  img2, img5,
+  img3, img4,
+  layout_matrix = layout_mat,
+  widths = c(1, 1),
+  heights = c(1, 1, 1)
+)
+
+# Labels corresponding to the non-blank images
+labels <- c("A", "B", "C", "D", "E")
+
+# Open PNG device
+png("Graphs/combined_heatmaps_labeled.png", width = 3600, height = 2600, res = 300)
+
+# Draw the combined grob
+grid.draw(combined)
+
+# Add labels manually using npc coordinates
+label_positions <- list(
+  c(0.03, 0.97),  # img1
+  c(0.03, 0.64),  # img2
+  c(0.53, 0.64),  # img5
+  c(0.03, 0.30),  # img3
+  c(0.53, 0.30)   # img4
+)
+
+for(i in seq_along(labels)) {
+  grid.text(labels[i],
+            x = unit(label_positions[[i]][1], "npc"),
+            y = unit(label_positions[[i]][2], "npc"),
+            gp = gpar(fontsize = 14, fontface = "bold"))
+}
+```
+
+## Figure 5
+
+-   Structural Resistance
+
+```{r}
+#colors depending on physical, chemical, or biological
+# variable levels
+var_levels <- c(
+  "TmpWtr", "Cond", "DOconc", "pH", "TurbRT",
+  "FlChlr", "FlPhyc"
+)
+# Define variable types
+var_type <- c(
+  "TmpWtr" = "Physical",
+  "DOconc" = "Chemical",
+  "DOpsat" = "Chemical",
+  "pH"     = "Chemical",
+  "FlChlr" = "Biological",
+  "FlPhyc" = "Biological",
+  "Cond"   = "Chemical",
+  "SpCond" = "Chemical",
+  "TurbRT" = "Chemical"
+)
+
+# Combine with labels for axis text
+var_labels <- c(
+  "TmpWtr" = "Water\ntemperature\n(°C)",
+  "DOconc" = "Dissolved\noxygen\n(mg/L)",
+  "DOpsat" = "Dissolved\noxygen\n(%)",
+  "pH"     = "pH",
+  "FlChlr" = "Chlorophyll-a\n(RFU)",
+  "FlPhyc" = "Phycocyanin\n(RFU)",
+  "Cond"   = "Conductivity\n(µS/cm)",
+  "SpCond" = "Specific conductivity\n(µS/cm)",
+  "TurbRT" = "Turbidity\n(NTU)"
+)
+
+type_colors <- c(
+  "Physical" = "#A6262D",
+  "Chemical" = "#A626A6",
+  "Biological" = "#4E2294"
+)
+
+#graphing - boxplot with one color
+RS_Box <- Tutira_D_WT_p1%>%
+  filter(!Variable %in% c("SpCond", "DOpsat", 'Cond','pH'))%>%
+  mutate(
+    Type = factor(var_type[as.character(Variable)], levels = c("Physical", "Chemical", "Biological")),
+    Variable = factor(
+      Variable,
+      levels = var_levels,
+      labels = var_labels[var_levels])
+  )%>%
+  ggplot(aes(x = Variable, y = RS, fill = Type))+
+  geom_boxplot()+
+  scale_fill_manual(values = type_colors)+
+  scale_y_continuous(limits = c(-1, 1))+
+  labs(y = "Resistance", x = NULL, fill = "")+
+  theme_pubr()+
+  theme(axis.text.x = element_text(color = '#452D7A'))
+RS_Box
+
+ggsave(
+  filename = "Draft Paper Graphs/RS_S_Box_colors_updated_colors.png",
+  plot = RS_Box,
+  width = 8, #14
+  height = 4, #7
+  dpi = 300
+)
+```
+
+## Figure 6
+
+-   Structural recovery heatmap with depth
+
+```{r}
+# ---- DEPTH-BASED ----
+recovery_vars_depth <- grep("^first_recovery_", colnames(Tutira_D_WT_p1), value = TRUE)
+
+#calculating days for each recovery
+depth_df <- Tutira_D_WT_p1 %>%
+  dplyr::select(Depth, last_during_time, all_of(recovery_vars_depth)) %>%
+  pivot_longer(
+    cols = all_of(recovery_vars_depth),
+    names_to = "variable",
+    values_to = "recovery_date"
+  ) %>%
+  mutate(
+    recovery_delay = as.numeric(difftime(recovery_date, last_during_time, units = "days")),
+    variable = gsub("first_recovery_", "", variable),
+    Depth = as.numeric(as.character(Depth)),
+    Type = "Structural",  # fixed assignment
+    Property = case_when(
+      variable == 'TmpWtr' ~ "Physical",
+      variable %in% c('Cond', 'DOconc', 'DOpsat', 'pH', 'SpCond', 'TurbRT') ~ "Chemical",
+      variable %in% c('FlChlr', 'FlPhyc') ~ "Biological",
+      TRUE ~ NA_character_  # for any other variables
+    )
+  ) %>%
+  dplyr::select(variable, Depth, recovery_delay, Type, Property)%>%
+  group_by(variable, Depth, Type, Property)%>%
+  dplyr::summarise_at('recovery_delay', mean, na.rm=TRUE)%>%
+  ungroup
+
+#graphing
+variable_order <- c(
+  # Physical
+  "TmpWtr",
+  # Chemical
+  "Cond", "DOconc", "DOpsat", "pH", "SpCond", "TurbRT", 
+  # Biological
+  "FlChlr", "FlPhyc"
+)
+
+depth_df <- depth_df %>%
+  mutate(Property = factor(Property, levels = c("Physical", "Chemical", "Biological")))
+filtered_vars <- unique(depth_df$variable[!depth_df$variable %in% c('SpCond', 'pH', 'DOpsat', 'Cond')])
+
+var_labels <- c(
+  # Physical
+  "TmpWtr" = "Water\nTemperature\n(°C)",
+  #chemical
+  #"Cond" = "Conductivity\n(µS/cm)",
+  "DOconc" = "Dissolved\nOxygen\n(mg/L)",
+  #"DOpsat" = "Oxygen\nSaturation\n(%)",
+  #"pH" = "pH",
+  #"SpCond" = "Specific\nConductivity\n(µS/cm)",
+  "TurbRT" = "Turbidity\n(NTU)",
+  # Biological
+  "FlChlr" = "Chl-a\n(RFU)",
+  "FlPhyc" = "Phycocyanin\n(RFU)"
+)
+
+type_colors <- c(
+  "Physical" = "#A6262D",
+  "Chemical" = "#A626A6",
+  "Biological" = "#4E2294"
+)
+
+depth_df <- depth_df %>%
+  mutate(
+    Property_colored = paste0(
+      "<span style='color:",
+      type_colors[Property],
+      "'>",
+      Property,
+      "</span>"
+    )
+  )
+ordered_levels <- paste0(
+  "<span style='color:",
+  type_colors[c("Physical","Chemical","Biological")],
+  "'>",
+  c("Physical","Chemical","Biological"),
+  "</span>"
+)
+
+depth_df <- depth_df %>%
+  mutate(Property_colored = factor(Property_colored,
+                                   levels = ordered_levels))
+
+depth_df <- depth_df %>%
+  mutate(variable = factor(variable, levels = names(var_labels), labels = var_labels[names(var_labels)]))
+
+RC<- ggplot(depth_df%>% filter(Type == 'Structural', variable != 'NA'), aes(x = variable, y = Depth, fill = recovery_delay)) +
+  geom_tile(color = "white") +
+  #scale_fill_viridis_c(option = "B", na.value = "grey80", limits = c(0, 364)) +
+  scale_fill_gradientn(
+  colors = c("#66C2C7", "#7B9E4C", "#196F3D"),  # green → blue → green
+  #colors = c('#A6262D', '#A626A6', '#4E2294'),
+  na.value = "grey80",
+  limits = c(0, 366)
+)+
+  #scale_x_discrete(labels = variable_order) +
+  scale_y_reverse(breaks = seq(37, 1, by = -2)) +
+  #scale_x_discrete(labels = var_labels) + 
+  labs(x = NULL, y = "Depth (m)", fill = "Days till Recovered") +
+  facet_wrap(~Property_colored, scales = "free_x", space = "free_x") +
+  theme_pubr()+ 
+  theme(
+  #   #axis.text.x = element_markdown(size = 9, angle = 45, hjust = 1, lineheight = 1.1),
+     panel.grid = element_blank(),
+     axis.text.x = element_text(color = '#452D7A'),
+     strip.text = element_markdown())
+  #   axis.ticks.length = unit(0.2, "cm"),
+  #   axis.title.x  = element_text(size = 8),
+  #   axis.title.y  = element_text(size = 8),
+  #   axis.text.x  = element_text(size = 8),
+  #   axis.text.y  = element_text(size = 8),
+  #   legend.text   = element_text(size = 8),
+  #   legend.title  = element_text(size = 8),
+  #   strip.text    = element_text(size = 8)
+  # )
+RC
+
+#save
+# ggsave(
+#   filename = "Draft Paper Graphs/facet_heatmap_newcolors.png",
+#   plot = RC,
+#   width = 5, #14
+#   height = 6, #7
+#   dpi = 300
+# )
+```
+
+## Figure 7
+
+-   Recovery and resilience for surface structural and functional variables
+
+```{r}
+#find longest recovery time - thermocline depth
+TD_rec_time   <- min(as.Date(Tutira_ND_WT_p1$first_recovery_thermo.depth), na.rm = TRUE) #2023-09-12
+Temp_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_TmpWtr[Tutira_D_WT_p1$Depth == 1]), na.rm = TRUE) #2023-04-21
+#Turb_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_TurbRT[Tutira_D_WT_p1$Depth == 1]), na.rm = TRUE)
+DO_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_DOconc[Tutira_D_WT_p1$Depth == 1]), na.rm = TRUE) #2023-03-21
+chl_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_FlChlr[Tutira_D_WT_p1$Depth == 1]), na.rm = TRUE) #2023-02-17
+Hyp_rec_time <- min(as.Date(Tutira_ND_WT_p1$first_recovery_Anoxic_Depth), na.rm = TRUE) #2023-02-22
+DC_rec_time <- min(as.Date(Tutira_ND_WT_p1$first_recovery_Depth_max_FlChlr), na.rm = TRUE) #2023-08-29
+
+#picking out storm periods
+start_time <- min(as.Date(Tutira_ND_WT_p1$first_during_time), na.rm = TRUE)
+end_time   <- min(as.Date(Tutira_ND_WT_p1$last_during_time), na.rm = TRUE)
+
+# Overall x-axis range: extend to latest recovery + 1 month
+x_min <- start_time - months(1)
+x_max <- TD_rec_time + months(1)
+
+y2_min <- -1
+y2_max <- 1
+
+############################################ surface water temp ########################################
+df_Temp <- Tutira_D_WT_p1 %>%
+  filter(Depth == 1, Date >= x_min & Date <= x_max)
+
+y_min_temp <- 10 #min(df_Temp$TmpWtr, na.rm = TRUE)
+y_max_temp <- max(df_Temp$TmpWtr, na.rm = TRUE)
+
+scale_fun_temp <- function(x) {
+  y_min_temp + (x - y2_min) / (y2_max - y2_min) * (y_max_temp - y_min_temp)
+}
+
+inv_scale_fun_temp <- function(x) {
+  y2_min + (x - y_min_temp) / (y_max_temp - y_min_temp) * (y2_max - y2_min)
+}
+
+storm_window_temp <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_temp, ymax = y_max_temp)
+recovery_window_temp <- data.frame(xmin = end_time, xmax = Temp_rec_time, ymin = y_min_temp, ymax = y_max_temp)
+
+SWT_R <- ggplot(df_Temp, aes(x = Date, y = TmpWtr)) +
+  geom_rect(data = storm_window_temp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_temp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = TmpWtr_lower, ymax = TmpWtr_upper), fill = '#909497', alpha = 0.5) +
+  geom_line(aes(y = TmpWtr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = TmpWtr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, Temp_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'TmpWtr', Depth == 1, Date < Temp_rec_time, Date > end_time), aes(x = Date, y = scale_fun_temp(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  limits = c(10, y_max_temp),
+  breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_temp(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Surface Water\nTemperature (°C)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = c(0.7,0.8), axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+SWT_R
+
+############################################ surface Dissolved Oxygen ########################################
+
+df_DO <- Tutira_D_WT_p1 %>%
+  filter(Depth == 1, Date >= x_min & Date <= x_max)
+
+y_min_DO <- 4 #min(df_DO$DOconc, na.rm = TRUE) 
+y_max_DO <- max(df_DO$DOconc, na.rm = TRUE)
+
+scale_fun_DO <- function(x) {
+  y_min_DO + (x - y2_min) / (y2_max - y2_min) * (y_max_DO - y_min_DO)
+}
+
+inv_scale_fun_DO <- function(x) {
+  y2_min + (x - y_min_DO) / (y_max_DO - y_min_DO) * (y2_max - y2_min)
+}
+
+storm_window_DO <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_DO, ymax = y_max_DO)
+recovery_window_DO <- data.frame(xmin = end_time, xmax = DO_rec_time, ymin = y_min_DO, ymax = y_max_DO)
+
+DO_R <- ggplot(df_DO, aes(x = Date, y = DOconc)) +
+  geom_rect(data = storm_window_DO, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_DO, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = DOconc_lower, ymax = DOconc_upper), fill = '#909497', alpha = 0.5) +
+  geom_line(aes(y = DOconc_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = DOconc, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, DO_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'DOconc', Depth == 1, Date < DO_rec_time, Date > end_time), aes(x = Date, y = scale_fun_DO(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  limits = c(y_min_DO, y_max_DO),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_DO(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Surface Dissolved\nOxygen (mg/L)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+DO_R
+
+############################################ surface Chlorophyll-a ########################################
+
+df_chl <- Tutira_D_WT_p1 %>%
+  filter(Depth == 1, Date >= x_min & Date <= x_max)
+
+y_min_chl <- min(df_chl$FlChlr, na.rm = TRUE) 
+y_max_chl <- 3.4 #max(df_chl$FlChlr, na.rm = TRUE)
+
+scale_fun_chl <- function(x) {
+  y_min_chl + (x - y2_min) / (y2_max - y2_min) * (y_max_chl - y_min_chl)
+}
+
+inv_scale_fun_chl <- function(x) {
+  y2_min + (x - y_min_chl) / (y_max_chl - y_min_chl) * (y2_max - y2_min)
+}
+
+storm_window_chl <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_chl, ymax = y_max_chl)
+recovery_window_chl <- data.frame(xmin = end_time, xmax = chl_rec_time, ymin = y_min_chl, ymax = y_max_chl)
+
+chl_R <- ggplot(df_chl, aes(x = Date, y = FlChlr)) +
+  geom_rect(data = storm_window_chl, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_chl, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = FlChlr_lower, ymax = FlChlr_upper), fill = '#909497', alpha = 0.5) +
+  geom_line(aes(y = FlChlr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = FlChlr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, chl_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'FlChlr', Depth == 1, Date < chl_rec_time, Date > end_time), aes(x = Date, y = scale_fun_chl(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  limits = c(y_min_chl, y_max_chl),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_chl(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Surface Chlorophyll-a\n(RFU)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none',
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+chl_R
+
+############################################ Thermocline Depth ########################################
+
+#for secondary axis
+# ranges
+y1_min <- min(Tutira_ND_WT_p1$thermo.depth, na.rm = TRUE)
+y1_max <- max(Tutira_ND_WT_p1$thermo.depth, na.rm = TRUE)
+
+y2_min <- -1
+y2_max <- 1
+
+# scale RL_Daily to thermo.depth range
+scale_fun_TD <- function(x) {
+  y1_max - (x - y2_min) / (y2_max - y2_min) * (y1_max - y1_min)
+}
+
+inv_scale_fun_TD <- function(x) {
+  y2_min + (y1_max - x) / (y1_max - y1_min) * (y2_max - y2_min)
+}
+
+#limiting time on graph
+df_TD <- Tutira_ND_WT_p1 %>%
+  filter(Date >= x_min & Date <= x_max)
+
+#setting y limits
+y_min_TD <- min(df_TD$thermo.depth, na.rm = TRUE)
+y_max_TD <- max(df_TD$thermo.depth, na.rm = TRUE)
+
+#creating boxes for storm and recovery
+storm_window_TD <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_TD, ymax = y_max_TD)
+recovery_window_TD <- data.frame(xmin = end_time, xmax = TD_rec_time, ymin = y_min_TD, ymax = y_max_TD)
+
+#graph
+TD_R <- ggplot(df_TD, aes(x = Date, y = thermo.depth)) +
+  geom_rect(data = storm_window_TD, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  #geom_rect(data = recovery_window_TD, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            #inherit.aes = FALSE, fill = '#27AE15', alpha = 0.2) +
+  geom_rect(data = recovery_window_TD, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = thermo.depth_lower, ymax = thermo.depth_upper), fill = '#909497', alpha = 0.5) +
+  geom_line(aes(y = thermo.depth_mean), colour = 'black', size = 1) +
+  geom_line(color = '#7B9E4C', size = 1) +
+  geom_line(data = Tutira_ND_WT_RR_daily%>% filter(Variable == 'thermo.depth', Date < TD_rec_time, Date > end_time), aes(x = Date, y = scale_fun_TD(RL_daily)), color = '#FF7B9C', size = 1, linetype = 'dashed')+
+  geom_vline(xintercept = c(start_time, end_time, TD_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  #scale_y_reverse(name = 'Thermocline Depth\n(m)', sec.axis = sec_axis(~inv_scale_fun(.), name = "RL Daily")) +
+  scale_y_reverse(
+  name = 'Thermocline Depth\n(m)',
+  limits = c(39, 0),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_TD(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  labs(x = NULL) +
+  theme_pubr()+
+  theme(axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#2E5EAA'), axis.title.y.right  = element_text(color = '#2E5EAA'))
+  # theme(axis.title.x  = element_text(size = 8),
+  #   axis.title.y  = element_text(size = 8),
+  #   axis.text.x   = element_text(size = 8),
+  #   axis.text.y   = element_text(size = 8))
+
+TD_R
+
+############################################ Hypoxic Depth ########################################
+
+df_Hyp <- Tutira_ND_WT_p1 %>%
+  filter(Date >= x_min & Date <= x_max)
+
+y_min_Hyp <- min(df_Hyp$Anoxic_Depth, na.rm = TRUE) 
+y_max_Hyp <- max(df_Hyp$Anoxic_Depth, na.rm = TRUE)
+
+scale_fun_Hyp <- function(x) {
+  y_max_Hyp - (x - y2_min) / (y2_max - y2_min) * (y_max_Hyp - y_min_Hyp)
+}
+
+inv_scale_fun_Hyp <- function(x) {
+  y2_min + (y_max_Hyp - x) / (y_max_Hyp - y_min_Hyp) * (y2_max - y2_min)
+}
+
+storm_window_Hyp <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_Hyp, ymax = y_max_Hyp)
+recovery_window_Hyp <- data.frame(xmin = end_time, xmax = Hyp_rec_time, ymin = y_min_Hyp, ymax = y_max_Hyp)
+
+Hyp_R <- ggplot(df_Hyp, aes(x = Date, y = Anoxic_Depth)) +
+  geom_rect(data = storm_window_Hyp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_Hyp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = Anoxic_Depth_lower, ymax = Anoxic_Depth_upper), fill = '#909497', alpha = 0.5) +
+  geom_line(aes(y = Anoxic_Depth_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = Anoxic_Depth, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, Hyp_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_ND_WT_RR_daily%>% filter(Variable == 'Anoxic_Depth', Date < Hyp_rec_time, Date > end_time), aes(x = Date, y = scale_fun_Hyp(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_reverse(
+  name = 'Hypoxic Depth\n(m)',
+  limits = c(39, y_min_Hyp),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_Hyp(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Hypoxic Depth\n(m)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x  = element_blank(),
+         axis.title.y = element_text(color = '#2E5EAA'), axis.title.y.right  = element_text(color = '#2E5EAA'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+Hyp_R
+
+############################################ Depth of maximum Chlorophyll-a ########################################
+
+df_DC <- Tutira_ND_WT_p1 %>%
+  filter(Date >= x_min & Date <= x_max)
+
+y_min_DC <- min(df_DC$Depth_max_FlChlr, na.rm = TRUE) 
+y_max_DC <- max(df_DC$Depth_max_FlChlr, na.rm = TRUE)
+
+scale_fun_DC <- function(x) {
+  y_max_DC - (x - y2_min) / (y2_max - y2_min) * (y_max_DC - y_min_DC)
+}
+
+inv_scale_fun_DC <- function(x) {
+  y2_min + (y_max_DC - x) / (y_max_DC - y_min_DC) * (y2_max - y2_min)
+}
+
+storm_window_DC <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_DC, ymax = y_max_DC)
+recovery_window_DC <- data.frame(xmin = end_time, xmax = DC_rec_time, ymin = y_min_DC, ymax = y_max_DC)
+
+DC_R <- ggplot(df_DC, aes(x = Date, y = Depth_max_FlChlr)) +
+  geom_rect(data = storm_window_DC, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_DC, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = Depth_max_FlChlr_lower, ymax = Depth_max_FlChlr_upper), fill = '#909497', alpha = 0.5) +
+  geom_line(aes(y = Depth_max_FlChlr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = Depth_max_FlChlr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, DC_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_ND_WT_RR_daily%>% filter(Variable == 'Depth_max_FlChlr', Date < DC_rec_time, Date > end_time), aes(x = Date, y = scale_fun_DC(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_reverse(
+  name = 'Depth of Maximum\nChlorophyll-a (m)',
+  limits = c(y_max_DC, y_min_DC),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_DC(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Depth of Maximum\nChlorophyll-a (m)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none',
+         axis.title.y = element_text(color = '#2E5EAA'), axis.title.y.right  = element_text(color = '#2E5EAA'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+DC_R
+
+#combine and save
+base_plot <-
+  ((SWT_R / DO_R / chl_R) |
+  (TD_R  / Hyp_R / DC_R)) +
+  plot_annotation(
+    tag_levels = "A"   # A, B, C
+  )
+
+base_plot
+
+combined_plot <-
+  ggdraw(base_plot) +
+  draw_label(
+    "Structural",
+    x = 0.25, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#452D7A'
+    #fontface = "bold", size = 14
+  ) +
+  draw_label(
+    "Functional",
+    x = 0.75, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#2E5EAA'
+    #fontface = "bold", size = 14
+  )
+
+combined_plot
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Recovery_Resilience_6_labels_newcolors_dg.png",
+#   plot = combined_plot,
+#   width = 10,
+#   height = 6,
+#   dpi = 300
+# )
+```
+
+## Figure 8
+
+-   Yearly resilience for structural and functional variables
+
+```{r}
+#Structural
+#WT
+WTV_DRL <- ggplot(Tutira_D_WT_RR_daily%>% filter(Variable == 'TmpWtr', Depth == 1, Year %in% c(2022, 2023, 2024, 2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Water Temperature",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  #scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  #scale_x_discrete(labels = c(TmpWtr = "Water Temperature"))+
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank(), axis.title.x = element_text(color = '#452D7A'))
+WTV_DRL
+#DO
+DOV_DRL <- ggplot(Tutira_D_WT_RR_daily%>% filter(Variable == 'DOconc', Depth == 1, Year %in% c(2022, 2023, 2024, 2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Dissolved Oxygen",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  #scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  #scale_x_discrete(labels = c(DOconc = "Dissolved Oxygen"))+
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank(), axis.title.x = element_text(color = '#452D7A'))
+DOV_DRL
+#Chl
+CHV_DRL <- ggplot(Tutira_D_WT_RR_daily%>% filter(Variable == 'FlChlr', Depth == 1, Year %in% c(2022, 2023, 2024, 2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Chlorophyll-a",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  #scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  #scale_x_discrete(labels = c(FlChlr = "Chlorophyll-a"))+
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.title.x = element_text(color = '#452D7A'))
+CHV_DRL
+
+#Functional
+#thermocline Depth
+TDV_DRL <- ggplot(Tutira_ND_WT_RR_daily%>% filter(Variable == 'thermo.depth', Year %in% c(2022, 2023, 2024, 2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Thermocline Depth",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank(), axis.title.x = element_text(color = '#2E5EAA'))
+TDV_DRL
+
+#Hypoxic Depth
+HDV_DRL <- ggplot(Tutira_ND_WT_RR_daily%>% filter(Variable == 'Anoxic_Depth', Year %in% c(2022, 2023, 2024, 2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Hypoxic Depth",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank(), axis.title.x = element_text(color = '#2E5EAA'))
+HDV_DRL
+
+#Depth of chl peak
+CDV_DRL <- ggplot(Tutira_ND_WT_RR_daily%>% filter(Variable == 'Depth_max_FlChlr', Year %in% c(2022, 2023, 2024, 2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Depth of Maximum Chlorophyll-a",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.title.x = element_text(color = '#2E5EAA'))
+CDV_DRL
+
+#combine and save
+base_plot <-
+  ((WTV_DRL / DOV_DRL / CHV_DRL) |
+  (TDV_DRL  / HDV_DRL / CDV_DRL)) +
+  plot_annotation(
+    tag_levels = "A"   # A, B, C
+  )
+
+base_plot
+
+combined_plot <-
+  ggdraw(base_plot) +
+  draw_label(
+    "Structural",
+    x = 0.25, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#452D7A'
+    #fontface = "bold", size = 14
+  ) +
+  draw_label(
+    "Functional",
+    x = 0.75, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#2E5EAA'
+    #fontface = "bold", size = 14
+  )
+
+combined_plot
+
+ggsave(
+  filename = "Draft Paper Graphs/Recovery_Resilience_alltime_violin_nolimits_newcolors_nl_updated.png",
+  plot = combined_plot,
+  width = 12,
+  height = 8,
+  dpi = 300
+)
+```
+
+# Supplementary 
+
+## Figures
+
+### Figure S1
+
+-   Resistance for functional variables
+
+```{r}
+#colors depending on physical, chemical, or biological
+#define order of variables
+var_levels <- c(
+  "schmidt.stability", "thermo.depth", "Anoxic_Depth", "Depth_max_FlChlr", "Depth_max_FlPhyc"
+)
+
+# Define variable types
+var_type <- c(
+  "schmidt.stability" = "Physical",
+  "thermo.depth" = "Physical",
+  "Anoxic_Depth" = "Chemical",
+  "Depth_max_FlChlr" = "Biological",
+  "Depth_max_FlPhyc" = "Biological"
+)
+
+# Combine with labels for axis text
+var_labels <- c(
+  # Physical
+  "schmidt.stability" = "Schmidt\nStability\n(J/m²)",
+  "thermo.depth" = "Thermocline\nDepth (m)",
+  # Chemical
+  "Anoxic_Depth" = "Hypoxic\nDepth (m)",
+  # Biological
+  "Depth_max_FlChlr" = "Peak\nChl-a\nDepth (m)",
+  "Depth_max_FlPhyc" = "Peak\nPhycocyanin\nDepth (m)"
+)
+
+type_colors <- c(
+  "Physical" = "#A6262D",
+  "Chemical" = "#A626A6",
+  "Biological" = "#4E2294"
+)
+
+#graphing - boxplot with one color
+RS_heatmap <- Tutira_ND_WT_p1%>%
+  filter(Variable %in% c('schmidt.stability', 'thermo.depth', 'Anoxic_Depth', 'Depth_max_FlChlr', 'Depth_max_FlPhyc'))%>%
+  mutate(
+    Type = factor(var_type[as.character(Variable)], levels = c("Physical", "Chemical", "Biological")),
+    Variable = factor(
+      Variable,
+      levels = var_levels,
+      labels = var_labels[var_levels])
+  )%>%
+  ggplot(aes(x = Variable, y = RS, color = Type))+
+  geom_point()+
+  scale_color_manual(values = type_colors)+
+  scale_y_continuous(limits = c(-1, 1))+
+  labs(y = "Resistance", x = NULL, color = "")+
+  theme_pubr()+
+  theme(axis.text.x = element_text(color = '#2E5EAA'))
+RS_heatmap
+
+# ggsave(
+#   filename = "Draft Paper Graphs/RS_F_point_colors_labels.png",
+#   plot = RS_heatmap,
+#   width = 9, #14
+#   height = 4, #7
+#   dpi = 300
+# )
+```
+
+### Figure S2
+
+-   Average thermocline depth
+
+```{r}
+#caluclates avg thermocline depth
+Tutira_TD <- Tutira_ND_WT_p1 %>%
+  dplyr::select(MD, thermo.depth_mean) %>%
+  group_by(MD)%>%
+  dplyr::summarise_at(vars(thermo.depth_mean),mean,na.rm=TRUE)%>%
+  ungroup() %>%
+  mutate(TD_avg = mean(thermo.depth_mean))
+
+TD_avg_value <- Tutira_TD %>%
+  filter(thermo.depth_mean <= 15) %>% # do not take into consideration when the lake is mixed
+  mutate(TD_avg = mean(thermo.depth_mean))  # numeric value
+
+TD <- ggplot(data = Tutira_TD, aes(x = MD, y = thermo.depth_mean))+
+  geom_point()+
+  scale_y_reverse(limits = c(0,40), breaks = seq(0, 40, 5))+
+  geom_hline(yintercept = TD_avg_value$TD_avg)+
+  labs(x = NULL, y = 'Avg Thermocline Depth (m)') +
+  scale_x_datetime(breaks = "1 month", labels = date_format("%b")) +
+  theme_pubr()
+TD
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Tutira_AvgTD.png",
+#   plot = TD,
+#   width = 5, #14
+#   height = 3, #7
+#   dpi = 300
+# )
+```
+
+### Figure S3
+
+-   heatmap of days till recovery for functional variables
+
+```{r}
+# ---- DEPTH-BASED ----
+recovery_vars <- grep("^first_recovery_", colnames(Tutira_ND_WT_p1), value = TRUE)
+
+func_df <- Tutira_ND_WT_p1 %>%
+  dplyr::select(last_during_time, all_of(recovery_vars)) %>%
+  pivot_longer(
+    cols = all_of(recovery_vars),
+    names_to = "variable",
+    values_to = "recovery_date"
+  ) %>%
+  mutate(
+    recovery_delay = as.numeric(difftime(recovery_date, last_during_time, units = "days")),
+    variable = gsub("first_recovery_", "", variable),
+    #Depth = as.numeric(as.character(Depth)),
+    Type = "Functional",  # fixed assignment
+    Property = case_when(
+      variable %in% c("schmidt.stability", "thermo.depth") ~ "Physical",
+      variable == 'Anoxic_Depth' ~ "Chemical",
+      variable %in% c('Depth_max_FlChlr', 'Depth_max_FlPhyc') ~ "Biological",
+      TRUE ~ NA_character_  # for any other variables
+    )
+  ) %>%
+  dplyr::select(variable, recovery_delay, Type, Property)%>%
+  group_by(variable, Type, Property)%>%
+  dplyr::summarise_at('recovery_delay', mean, na.rm=TRUE)%>%
+  ungroup
+
+# Define variable types
+varible_order <- c(
+#physical
+  "schmidt.stability", "thermo.depth", 
+  #chemical
+  "Anoxic_Depth",
+  #biological,
+  "Depth_max_FlChlr", "Depth_max_FlPhyc"
+)
+
+# Combine with labels for axis text
+var_labels <- c(
+  # Physical
+  "schmidt.stability" = "Schmidt\nStability\n(J/m²)",
+  "thermo.depth" = "Thermocline\nDepth (m)",
+  # Chemical
+  "Anoxic_Depth" = "Hypoxic\nDepth (m)",
+  # Biological
+  "Depth_max_FlChlr" = "Peak\nChl-a\nDepth (m)",
+  "Depth_max_FlPhyc" = "Peak\nPhycocyanin\nDepth (m)"
+)
+
+type_colors <- c(
+  "Physical" = "#A6262D",
+  "Chemical" = "#A626A6",
+  "Biological" = "#4E2294"
+)
+func_df <- func_df %>%
+  mutate(
+    Property_colored = paste0(
+      "<span style='color:",
+      type_colors[Property],
+      "'>",
+      Property,
+      "</span>"
+    )
+  )
+ordered_levels <- paste0(
+  "<span style='color:",
+  type_colors[c("Physical","Chemical","Biological")],
+  "'>",
+  c("Physical","Chemical","Biological"),
+  "</span>"
+)
+
+func_df <- func_df %>%
+  mutate(Property_colored = factor(Property_colored, levels = ordered_levels))%>%
+  mutate(dummy_x = "All")
+
+
+RC<- ggplot(func_df%>% filter(Type == 'Functional', !variable %in% c('Buoyancy', 'Meta_Bottom', 'Meta_Top', 'lake.number')), aes(x = variable, y = dummy_x, fill = recovery_delay)) +
+  geom_tile(color = "white") +
+  #scale_fill_viridis_c(option = "B", na.value = "grey80", limits = c(0, 364)) +
+  scale_fill_gradientn(
+  colors = c("#66C2C7", "#7B9E4C", "#196F3D"),  # green → blue → green
+  #colors = c('#A6262D', '#A626A6', '#4E2294'),
+  na.value = "grey80",
+  limits = c(0, 366)
+)+
+  #scale_x_discrete(labels = variable_order) +
+  #scale_y_reverse(breaks = seq(37, 1, by = -2)) +
+  scale_x_discrete(labels = var_labels) + 
+  labs(x = NULL, y = NULL, fill = "Days till Recovered") +
+  facet_wrap(~Property_colored, scales = "free_x", space = "free_x") +
+  theme_pubr()+ 
+  theme(
+  #   #axis.text.x = element_markdown(size = 9, angle = 45, hjust = 1, lineheight = 1.1),
+     panel.grid = element_blank(),
+     axis.text.x = element_text(color = '#2E5EAA'),
+     strip.text = element_markdown(),
+     axis.text.y = element_blank())
+  #   axis.ticks.length = unit(0.2, "cm"),
+  #   axis.title.x  = element_text(size = 8),
+  #   axis.title.y  = element_text(size = 8),
+  #   axis.text.x  = element_text(size = 8),
+  #   axis.text.y  = element_text(size = 8),
+  #   legend.text   = element_text(size = 8),
+  #   legend.title  = element_text(size = 8),
+  #   strip.text    = element_text(size = 8)
+  # )
+RC
+
+#save
+# ggsave(
+#   filename = "Draft Paper Graphs/facet_heatmap_functional_newcolors.png",
+#   plot = RC,
+#   width = 5, #14
+#   height = 3, #7
+#   dpi = 300
+# )
+```
+
+### Figure S4
+
+-   Resilience and recovery for middle (10m) and bottom (35) structural variables
+
+```{r}
+#middle
+#find longest recovery time - thermocline depth
+Temp_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_TmpWtr[Tutira_D_WT_p1$Depth == 10]), na.rm = TRUE) 
+DO_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_DOconc[Tutira_D_WT_p1$Depth == 10]), na.rm = TRUE) 
+chl_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_FlChlr[Tutira_D_WT_p1$Depth == 10]), na.rm = TRUE) 
+TD_rec_time   <- min(as.Date(Tutira_ND_WT_p1$first_recovery_thermo.depth), na.rm = TRUE) #2023-09-12
+
+#picking out storm periods
+start_time <- min(as.Date(Tutira_ND_WT_p1$first_during_time), na.rm = TRUE)
+end_time   <- min(as.Date(Tutira_ND_WT_p1$last_during_time), na.rm = TRUE)
+
+# Overall x-axis range: extend to latest recovery + 1 month
+x_min <- start_time - months(1)
+x_max <- TD_rec_time + months(1)
+
+y2_min <- -1
+y2_max <- 1
+
+############################################ surface water temp ########################################
+df_Temp_10 <- Tutira_D_WT_p1 %>%
+  filter(Depth == 10, Date >= x_min & Date <= x_max)
+
+y_min_temp <- min(df_Temp_10$TmpWtr_lower, na.rm = TRUE)
+y_max_temp <- max(df_Temp_10$TmpWtr_upper, na.rm = TRUE)
+
+scale_fun_temp <- function(x) {
+  y_min_temp + (x - y2_min) / (y2_max - y2_min) * (y_max_temp - y_min_temp)
+}
+
+inv_scale_fun_temp <- function(x) {
+  y2_min + (x - y_min_temp) / (y_max_temp - y_min_temp) * (y2_max - y2_min)
+}
+
+storm_window_temp <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_temp, ymax = y_max_temp)
+recovery_window_temp <- data.frame(xmin = end_time, xmax = Temp_rec_time, ymin = y_min_temp, ymax = y_max_temp)
+
+SWT_R_10 <- ggplot(df_Temp_10, aes(x = Date, y = TmpWtr)) +
+  geom_rect(data = storm_window_temp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_temp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = TmpWtr_lower, ymax = TmpWtr_upper), fill = '#BDC3C7', alpha = 0.5) +
+  geom_line(aes(y = TmpWtr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = TmpWtr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, Temp_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'TmpWtr', Depth == 10, Date < Temp_rec_time, Date > end_time), aes(x = Date, y = scale_fun_temp(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  #limits = c(10, y_max_temp),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_temp(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Middle Water\nTemperature (°C)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = c(0.7,0.8), axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+SWT_R_10
+
+############################################ surface Dissolved Oxygen ########################################
+
+df_DO_10 <- Tutira_D_WT_p1 %>%
+  filter(Depth == 10, Date >= x_min & Date <= x_max)
+
+y_min_DO <- min(df_DO_10$DOconc_lower, na.rm = TRUE) 
+y_max_DO <- max(df_DO_10$DOconc_upper, na.rm = TRUE)
+
+scale_fun_DO <- function(x) {
+  y_min_DO + (x - y2_min) / (y2_max - y2_min) * (y_max_DO - y_min_DO)
+}
+
+inv_scale_fun_DO <- function(x) {
+  y2_min + (x - y_min_DO) / (y_max_DO - y_min_DO) * (y2_max - y2_min)
+}
+
+storm_window_DO <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_DO, ymax = y_max_DO)
+recovery_window_DO <- data.frame(xmin = end_time, xmax = DO_rec_time, ymin = y_min_DO, ymax = y_max_DO)
+
+DO_R_10 <- ggplot(df_DO_10, aes(x = Date, y = DOconc)) +
+  geom_rect(data = storm_window_DO, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_DO, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = DOconc_lower, ymax = DOconc_upper), fill = '#BDC3C7', alpha = 0.5) +
+  geom_line(aes(y = DOconc_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = DOconc, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, DO_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'DOconc', Depth == 10, Date < DO_rec_time, Date > end_time), aes(x = Date, y = scale_fun_DO(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  #limits = c(y_min_DO, y_max_DO),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_DO(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Middle Dissolved\nOxygen (mg/L)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+DO_R_10
+
+############################################ surface Chlorophyll-a ########################################
+
+df_chl_10 <- Tutira_D_WT_p1 %>%
+  filter(Depth == 10, Date >= x_min & Date <= x_max)
+
+y_min_chl <- min(df_chl_10$FlChlr_lower, na.rm = TRUE) 
+y_max_chl <- max(df_chl_10$FlChlr_upper, na.rm = TRUE)
+
+scale_fun_chl <- function(x) {
+  y_min_chl + (x - y2_min) / (y2_max - y2_min) * (y_max_chl - y_min_chl)
+}
+
+inv_scale_fun_chl <- function(x) {
+  y2_min + (x - y_min_chl) / (y_max_chl - y_min_chl) * (y2_max - y2_min)
+}
+
+storm_window_chl <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_chl, ymax = y_max_chl)
+recovery_window_chl <- data.frame(xmin = end_time, xmax = chl_rec_time, ymin = y_min_chl, ymax = y_max_chl)
+
+chl_R_10 <- ggplot(df_chl_10, aes(x = Date, y = FlChlr)) +
+  geom_rect(data = storm_window_chl, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_chl, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = FlChlr_lower, ymax = FlChlr_upper), fill = '#BDC3C7', alpha = 0.5) +
+  geom_line(aes(y = FlChlr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = FlChlr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, chl_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'FlChlr', Depth == 10, Date < chl_rec_time, Date > end_time), aes(x = Date, y = scale_fun_chl(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  #limits = c(y_min_chl, y_max_chl),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_chl(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Middle Chlorophyll-a\n(RFU)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none',
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+chl_R_10
+
+############################### bottom ##########################
+#find longest recovery time - thermocline depth
+Temp_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_TmpWtr[Tutira_D_WT_p1$Depth == 35]), na.rm = TRUE) 
+DO_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_DOconc[Tutira_D_WT_p1$Depth == 35]), na.rm = TRUE) 
+chl_rec_time <- min(as.Date(Tutira_D_WT_p1$first_recovery_FlChlr[Tutira_D_WT_p1$Depth == 35]), na.rm = TRUE) 
+
+#picking out storm periods
+start_time <- min(as.Date(Tutira_ND_WT_p1$first_during_time), na.rm = TRUE)
+end_time   <- min(as.Date(Tutira_ND_WT_p1$last_during_time), na.rm = TRUE)
+
+# Overall x-axis range: extend to latest recovery + 1 month
+x_min <- start_time - months(1)
+x_max <- TD_rec_time + months(1)
+
+y2_min <- -1
+y2_max <- 1
+
+############################################ surface water temp ########################################
+df_Temp_35 <- Tutira_D_WT_p1 %>%
+  filter(Depth == 35, Date >= x_min & Date <= x_max)
+
+y_min_temp <- min(df_Temp_35$TmpWtr_lower, na.rm = TRUE)
+y_max_temp <- max(df_Temp_35$TmpWtr, na.rm = TRUE)
+
+scale_fun_temp <- function(x) {
+  y_min_temp + (x - y2_min) / (y2_max - y2_min) * (y_max_temp - y_min_temp)
+}
+
+inv_scale_fun_temp <- function(x) {
+  y2_min + (x - y_min_temp) / (y_max_temp - y_min_temp) * (y2_max - y2_min)
+}
+
+storm_window_temp <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_temp, ymax = y_max_temp)
+recovery_window_temp <- data.frame(xmin = end_time, xmax = Temp_rec_time, ymin = y_min_temp, ymax = y_max_temp)
+
+SWT_R_35 <- ggplot(df_Temp_35, aes(x = Date, y = TmpWtr)) +
+  geom_rect(data = storm_window_temp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_temp, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = TmpWtr_lower, ymax = TmpWtr_upper), fill = '#BDC3C7', alpha = 0.5) +
+  geom_line(aes(y = TmpWtr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = TmpWtr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, Temp_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'TmpWtr', Depth == 35, Date < Temp_rec_time, Date > end_time), aes(x = Date, y = scale_fun_temp(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  #limits = c(10, y_max_temp),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_temp(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Bottom Water\nTemperature (°C)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+SWT_R_35
+
+############################################ surface Dissolved Oxygen ########################################
+
+df_DO_35 <- Tutira_D_WT_p1 %>%
+  filter(Depth == 35, Date >= x_min & Date <= x_max)
+
+y_min_DO <- min(df_DO_35$DOconc_lower, na.rm = TRUE) 
+y_max_DO <- max(df_DO_35$DOconc_upper, na.rm = TRUE)
+
+scale_fun_DO <- function(x) {
+  y_min_DO + (x - y2_min) / (y2_max - y2_min) * (y_max_DO - y_min_DO)
+}
+
+inv_scale_fun_DO <- function(x) {
+  y2_min + (x - y_min_DO) / (y_max_DO - y_min_DO) * (y2_max - y2_min)
+}
+
+storm_window_DO <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_DO, ymax = y_max_DO)
+recovery_window_DO <- data.frame(xmin = end_time, xmax = DO_rec_time, ymin = y_min_DO, ymax = y_max_DO)
+
+DO_R_35 <- ggplot(df_DO_35, aes(x = Date, y = DOconc)) +
+  geom_rect(data = storm_window_DO, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_DO, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = DOconc_lower, ymax = DOconc_upper), fill = '#BDC3C7', alpha = 0.5) +
+  geom_line(aes(y = DOconc_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = DOconc, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, DO_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'DOconc', Depth == 35, Date < DO_rec_time, Date > end_time), aes(x = Date, y = scale_fun_DO(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  #limits = c(y_min_DO, y_max_DO),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_DO(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Bottom Dissolved\nOxygen (mg/L)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x  = element_blank(),
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+DO_R_35
+
+############################################ surface Chlorophyll-a ########################################
+
+df_chl_35 <- Tutira_D_WT_p1 %>%
+  filter(Depth == 35, Date >= x_min & Date <= x_max)
+
+y_min_chl <- min(df_chl_35$FlChlr_lower, na.rm = TRUE) 
+y_max_chl <- max(df_chl_35$FlChlr_upper, na.rm = TRUE)
+
+scale_fun_chl <- function(x) {
+  y_min_chl + (x - y2_min) / (y2_max - y2_min) * (y_max_chl - y_min_chl)
+}
+
+inv_scale_fun_chl <- function(x) {
+  y2_min + (x - y_min_chl) / (y_max_chl - y_min_chl) * (y2_max - y2_min)
+}
+
+storm_window_chl <- data.frame(xmin = start_time, xmax = end_time, ymin = y_min_chl, ymax = y_max_chl)
+recovery_window_chl <- data.frame(xmin = end_time, xmax = chl_rec_time, ymin = y_min_chl, ymax = y_max_chl)
+
+chl_R_35 <- ggplot(df_chl_35, aes(x = Date, y = FlChlr)) +
+  geom_rect(data = storm_window_chl, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#66C2C7', alpha = 0.3) +
+  geom_rect(data = recovery_window_chl, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = '#196F3D', alpha = 0.2) +
+  geom_ribbon(aes(ymin = FlChlr_lower, ymax = FlChlr_upper), fill = '#BDC3C7', alpha = 0.5) +
+  geom_line(aes(y = FlChlr_mean, color = "Mean"), size = 1) +
+  geom_line(aes(y = FlChlr, color = "2023"), size = 1) +
+  #scale_y_continuous(limits = c(10, 25), breaks = seq(10, 25, by = 5)) +  # force axis limits and breaks
+  geom_vline(xintercept = c(start_time, end_time, chl_rec_time), linetype = "dashed",
+             color = c("black","black","#196F3D")) +
+  #scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  geom_line(data = Tutira_D_WT_RR_daily%>% filter(Variable == 'FlChlr', Depth == 35, Date < chl_rec_time, Date > end_time), aes(x = Date, y = scale_fun_chl(RL_daily), color = 'Resilience'), size = 1, linetype = 'dashed')+
+  scale_color_manual(values = c("Mean" = "black", "2023" = "#7B9E4C", 'Resilience' = '#FF7B9C')) +
+  scale_y_continuous(
+  #limits = c(y_min_chl, y_max_chl),
+  #breaks = seq(10, 25, by = 5),
+  sec.axis = sec_axis(
+    ~inv_scale_fun_chl(.),
+    name   = "Daily Resilience",
+    breaks = seq(-1, 1, by = 0.5),
+    labels = scales::number_format(accuracy = 0.1)
+  )
+)+
+  scale_x_date(limits = c(x_min, x_max), date_labels = "%b", date_breaks = "1 month") +
+  labs(x = NULL, y = 'Bottom Chlorophyll-a\n(RFU)', color = NULL) +
+  theme_pubr()+
+  theme(legend.position = 'none',
+        axis.title.y = element_text(color = '#452D7A'), axis.title.y.right  = element_text(color = '#452D7A'))
+    # axis.title.x  = element_text(size = 8),
+    # axis.title.y  = element_text(size = 8),
+    # axis.text.x   = element_text(size = 8),
+    # axis.text.y   = element_text(size = 8),
+    # legend.text   = element_text(size = 8))
+chl_R_35
+
+##################### combine and save ###############################
+base_plot <-
+  ((SWT_R_10 / DO_R_10 / chl_R_10) |
+  (SWT_R_35  / DO_R_35 / chl_R_35)) +
+  plot_annotation(
+    tag_levels = "A"   # A, B, C
+  )
+
+base_plot
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Recovery_Resilience_SS.png",
+#   plot = base_plot,
+#   width = 10,
+#   height = 6,
+#   dpi = 300
+# )
+```
+
+### Figure S5
+
+-   Bhattacharyya coefficient per year for structural and functional variables
+
+```{r}
+###################### calculate #########################
+#structural
+# Function to calculate Bhattacharyya coefficient using histograms
+bhattacharyya_hist <- function(x, y, bins = 30) {
+  
+  # Define common breaks
+  brks <- seq(min(c(x, y)), max(c(x, y)), length.out = bins + 1)
+  
+  # Histogram counts
+  h1 <- hist(x, breaks = brks, plot = FALSE)$counts
+  h2 <- hist(y, breaks = brks, plot = FALSE)$counts
+  
+  # Convert to probabilities
+  p1 <- h1 / sum(h1)
+  p2 <- h2 / sum(h2)
+  
+  # Bhattacharyya coefficient
+  BC <- sum(sqrt(p1 * p2))
+  return(BC)
+}
+Tutira_S6 <- Tutira_D_WT_RR_daily %>%
+  filter(Variable %in% c('TmpWtr', 'DOconc','FlChlr')) %>%
+  filter(Depth == 1) %>%
+  filter(Year %in% c(2022, 2023, 2024, 2025))
+
+overlap_results <- list()
+counter <- 1
+
+variables <- unique(Tutira_S6$Variable)
+years <- sort(unique(Tutira_S6$Year))
+
+for (var in variables) {
+  var_data <- Tutira_S6 %>% filter(Variable == var)
+  
+  for (i in 1:(length(years)-1)) {
+    for (j in (i+1):length(years)) {
+      
+      x <- var_data$RL_daily[var_data$Year == years[i]] %>% na.omit()
+      y <- var_data$RL_daily[var_data$Year == years[j]] %>% na.omit()
+      
+      if(length(x) < 5 | length(y) < 5) next  # smaller threshold
+      
+      bc <- bhattacharyya_hist(x, y, bins = 30)
+      
+      overlap_results[[counter]] <- data.frame(
+        Variable = var,
+        Year1 = years[i],
+        Year2 = years[j],
+        Bhattacharyya = bc
+      )
+      
+      counter <- counter + 1
+    }
+  }
+}
+
+overlap_df <- bind_rows(overlap_results)
+
+#functional
+# Function to calculate Bhattacharyya coefficient using histograms
+#functional
+bhattacharyya_hist <- function(x, y, bins = 30) {
+  
+  # Define common breaks
+  brks <- seq(min(c(x, y)), max(c(x, y)), length.out = bins + 1)
+  
+  # Histogram counts
+  h1 <- hist(x, breaks = brks, plot = FALSE)$counts
+  h2 <- hist(y, breaks = brks, plot = FALSE)$counts
+  
+  # Convert to probabilities
+  p1 <- h1 / sum(h1)
+  p2 <- h2 / sum(h2)
+  
+  # Bhattacharyya coefficient
+  BC <- sum(sqrt(p1 * p2))
+  return(BC)
+}
+
+Tutira_F6 <- Tutira_ND_WT_RR_daily %>%
+  filter(Variable %in% c('thermo.depth', 'Anoxic_Depth','Depth_max_FlChlr')) %>%
+  filter(Year %in% c(2022, 2023, 2024, 2025))
+
+overlap_results <- list()
+counter <- 1
+
+variables <- unique(Tutira_F6$Variable)
+years <- sort(unique(Tutira_F6$Year))
+
+for (var in variables) {
+  var_data <- Tutira_F6 %>% filter(Variable == var)
+  
+  for (i in 1:(length(years)-1)) {
+    for (j in (i+1):length(years)) {
+      
+      x <- var_data$RL_daily[var_data$Year == years[i]] %>% na.omit()
+      y <- var_data$RL_daily[var_data$Year == years[j]] %>% na.omit()
+      
+      if(length(x) < 5 | length(y) < 5) next  # smaller threshold
+      
+      bc <- bhattacharyya_hist(x, y, bins = 30)
+      
+      overlap_results[[counter]] <- data.frame(
+        Variable = var,
+        Year1 = years[i],
+        Year2 = years[j],
+        Bhattacharyya = bc
+      )
+      
+      counter <- counter + 1
+    }
+  }
+}
+
+overlap_df_F <- bind_rows(overlap_results)
+
+######################## graph #######################
+#Structural
+ggplot(overlap_df, aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  facet_wrap(~ Variable, scales="free") +
+  scale_fill_viridis_c(option="magma", direction=-1) +
+  labs(
+    x="Year 1", y="Year 2",
+    fill="Bhattacharyya Coef"
+  ) +
+  theme_pubr()
+
+#Functional
+ggplot(overlap_df_F, aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  facet_wrap(~ Variable, scales="free") +
+  scale_fill_viridis_c(option="magma", direction=-1) +
+  labs(
+    x="Year 1", y="Year 2",
+    fill="Bhattacharyya Coef"
+  ) +
+  theme_pubr()
+
+#structural
+B_WT <- ggplot(overlap_df %>% filter(Variable == 'TmpWtr'), aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  geom_text(aes(label = round(Bhattacharyya, 2)), size = 3) +  # add values
+  scale_fill_distiller(palette = "YlGnBu", direction = 1, limits=c(0.86,0.98), guide = guide_colorbar(
+      direction = "horizontal",   # make legend horizontal
+      title.position = "top",     # move title above the bar
+      barwidth = 10,              # adjust width
+      barheight = 0.5             # adjust height
+    ))+
+  labs(x=NULL, y=NULL,fill="Bhattacharyya Coef") +
+  annotate(
+    "text",
+    x = '2024',       # x position (adjust based on your RL_daily range)
+    y = '2024',       # y position (adjust based on density height)
+    label = "Surface Water\nTemperature",
+    #hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  theme_pubr()+
+  theme(legend.position = c(0.75, 0.18), axis.text.x = element_blank())
+B_WT
+B_DO <- ggplot(overlap_df %>% filter(Variable == 'DOconc'),
+               aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  geom_text(aes(label = round(Bhattacharyya, 2)), size = 3) +  # add values
+  scale_fill_distiller(palette = "YlGnBu", direction = 1, limits=c(0.86,0.98))+
+  labs(x=NULL, y=NULL, fill=NULL) +
+  annotate(
+    "text",
+    x = '2024',       # x position (adjust based on your RL_daily range)
+    y = '2024',       # y position (adjust based on density height)
+    label = "Surface Dissolved\noxygen",
+    #hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+B_DO
+B_C <- ggplot(overlap_df %>% filter(Variable == 'FlChlr'),
+               aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  geom_text(aes(label = round(Bhattacharyya, 2)), size = 3) +  # add values
+  scale_fill_distiller(palette = "YlGnBu", direction = 1, limits=c(0.86,0.98))+
+  labs(x=NULL, y=NULL, fill=NULL) +
+  annotate(
+    "text",
+    x = '2024',       # x position (adjust based on your RL_daily range)
+    y = '2024',       # y position (adjust based on density height)
+    label = "Surface Chlorophyll-a",
+    #hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  theme_pubr()+
+  theme(legend.position = 'none')
+B_C
+#Functional
+B_TD <- ggplot(overlap_df_F %>% filter(Variable == 'thermo.depth'),
+               aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  geom_text(aes(label = round(Bhattacharyya, 2)), size = 3) +  # add values
+  scale_fill_distiller(palette = "YlGnBu", direction = 1, limits=c(0.86,0.98))+
+  labs(x=NULL, y=NULL, fill=NULL) +
+  annotate(
+    "text",
+    x = '2024',       # x position (adjust based on your RL_daily range)
+    y = '2024',       # y position (adjust based on density height)
+    label = "Thermocline\nDepth",
+    #hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+B_TD
+B_HD <- ggplot(overlap_df_F %>% filter(Variable == 'Anoxic_Depth'),
+               aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  geom_text(aes(label = round(Bhattacharyya, 2)), size = 3) +  # add values
+  scale_fill_distiller(palette = "YlGnBu", direction = 1, limits=c(0.86,0.98))+
+  labs(x=NULL, y=NULL, fill=NULL) +
+  annotate(
+    "text",
+    x = '2024',       # x position (adjust based on your RL_daily range)
+    y = '2024',       # y position (adjust based on density height)
+    label = "Hypoxic\nDepth",
+    #hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+B_HD
+B_CD <- ggplot(overlap_df_F %>% filter(Variable == 'Depth_max_FlChlr'),
+               aes(x=factor(Year1), y=factor(Year2), fill=Bhattacharyya)) +
+  geom_tile(color="white") +
+  geom_text(aes(label = round(Bhattacharyya, 2)), size = 3) +  # add values
+  scale_fill_distiller(palette = "YlGnBu", direction = 1, limits=c(0.86,0.98))+
+  labs(x=NULL, y=NULL, fill=NULL) +
+  annotate(
+    "text",
+    x = '2024',       # x position (adjust based on your RL_daily range)
+    y = '2024',       # y position (adjust based on density height)
+    label = "Depth of\nMaximum\nChlorophyll-a",
+    #hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  theme_pubr()+
+  theme(legend.position = 'none')
+B_CD
+
+#combine and save
+base_plot <-
+  ((B_WT / B_DO / B_C) |
+  (B_TD  / B_HD / B_CD)) +
+  plot_annotation(
+    tag_levels = "A"   # A, B, C
+  )
+
+base_plot
+
+combined_plot <-
+  ggdraw(base_plot) +
+  draw_label(
+    "Structural",
+    x = 0.25, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#452D7A'
+    #fontface = "bold", size = 14
+  ) +
+  draw_label(
+    "Functional",
+    x = 0.75, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#2E5EAA'
+    #fontface = "bold", size = 14
+  )
+
+combined_plot
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Bhattacharyya_Coef.png",
+#   plot = combined_plot,
+#   width = 12,
+#   height = 8,
+#   dpi = 300
+# )
+```
+
+### Figure S6
+
+-   Density curves of structural and functional variables
+
+```{r}
+Tutira_D_WT_RR_daily$Year <- factor(Tutira_D_WT_RR_daily$Year, levels = c(2022, 2024, 2025, 2023))
+Tutira_D_WT_RR_daily$Variable <- factor(Tutira_D_WT_RR_daily$Variable, levels = c('TmpWtr', 'DOconc', 'FlChlr'))
+Tutira_ND_WT_RR_daily$Year <- factor(Tutira_ND_WT_RR_daily$Year, levels = c(2022, 2024, 2025, 2023))
+Tutira_ND_WT_RR_daily$Variable <- factor(Tutira_ND_WT_RR_daily$Variable, levels = c('thermo.depth', 'Anoxic_Depth', 'Depth_max_FlChlr'))
+
+# Combine with labels for axis text
+var_labels <- c(
+  "TmpWtr" = "Water\ntemperature\n(°C)",
+  "DOconc" = "Dissolved\noxygen\n(mg/L)",
+  "DOpsat" = "Dissolved\noxygen\n(%)",
+  "pH"     = "pH",
+  "FlChlr" = "Chlorophyll-a\n(RFU)",
+  "FlPhyc" = "Phycocyanin\n(RFU)",
+  "Cond"   = "Conductivity\n(µS/cm)",
+  "SpCond" = "Specific conductivity\n(µS/cm)",
+  "TurbRT" = "Turbidity\n(NTU)"
+)
+
+#structural
+#WT
+D_WT <- ggplot(data = Tutira_D_WT_RR_daily %>% filter(Variable == 'TmpWtr', Depth == 1), aes(x = RL_daily, group = Year, fill = Year, color = Year)) +
+  geom_density(alpha = 0.5)+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL)+
+  annotate(
+    "text",
+    x = -0.95,       # x position (adjust based on your RL_daily range)
+    y = 3,       # y position (adjust based on density height)
+    label = "Surface Water Temperature",
+    hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  xlim(c(-1,1))+
+  theme_pubr()+
+  theme(axis.text.x = element_blank(), legend.position = c(0.2, 0.5))
+D_WT
+#DO
+D_DO <- ggplot(data = Tutira_D_WT_RR_daily %>% filter(Variable == 'DOconc', Depth == 1), aes(x = RL_daily, group = Year, fill = Year, color = Year)) +
+  geom_density(alpha = 0.5)+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL)+
+  annotate(
+    "text",
+    x = -0.95,       # x position (adjust based on your RL_daily range)
+    y = 3.5,       # y position (adjust based on density height)
+    label = "Surface Dissolved oxygen",
+    hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  xlim(c(-1,1))+
+  theme_pubr()+
+  theme(axis.text.x = element_blank(), legend.position = 'none')
+D_DO
+#chla
+D_chl <- ggplot(data = Tutira_D_WT_RR_daily %>% filter(Variable == 'FlChlr', Depth == 1), aes(x = RL_daily, group = Year, fill = Year, color = Year)) +
+  geom_density(alpha = 0.5)+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = 'Daily Resilience')+
+  annotate(
+    "text",
+    x = -0.95,       # x position (adjust based on your RL_daily range)
+    y = 11,       # y position (adjust based on density height)
+    label = "Surface Chlorophyll-a",
+    hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  xlim(c(-1,1))+
+  theme_pubr()+
+  theme(legend.position = 'none')
+D_chl
+
+#functional
+#TD
+D_TD <- ggplot(data = Tutira_ND_WT_RR_daily %>% filter(Variable == 'thermo.depth'), aes(x = RL_daily, group = Year, fill = Year, color = Year)) +
+  geom_density(alpha = 0.5)+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL)+
+  annotate(
+    "text",
+    x = -0.95,       # x position (adjust based on your RL_daily range)
+    y = 1.8,       # y position (adjust based on density height)
+    label = "Thermocline Depth",
+    hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  xlim(c(-1,1))+
+  theme_pubr()+
+  theme(axis.text.x = element_blank(), legend.position = 'none')
+D_TD
+#DO
+D_H <- ggplot(data = Tutira_ND_WT_RR_daily %>% filter(Variable == 'Anoxic_Depth'), aes(x = RL_daily, group = Year, fill = Year, color = Year)) +
+  geom_density(alpha = 0.5)+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL)+
+  annotate(
+    "text",
+    x = -0.95,       # x position (adjust based on your RL_daily range)
+    y = 3.5,       # y position (adjust based on density height)
+    label = "Hypoxic Depth",
+    hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  xlim(c(-1,1))+
+  theme_pubr()+
+  theme(axis.text.x = element_blank(), legend.position = 'none')
+D_H
+#chla
+D_mchl <- ggplot(data = Tutira_ND_WT_RR_daily %>% filter(Variable == 'Depth_max_FlChlr'), aes(x = RL_daily, group = Year, fill = Year, color = Year)) +
+  geom_density(alpha = 0.5)+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = 'Daily Resilience')+
+  annotate(
+    "text",
+    x = -0.95,       # x position (adjust based on your RL_daily range)
+    y = 2,       # y position (adjust based on density height)
+    label = "Depth of Maximum Chlorophyll-a",
+    hjust = 0,     # left align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  xlim(c(-1,1))+
+  theme_pubr()+
+  theme(legend.position = 'none')
+D_mchl
+
+#combine and save
+base_plot <-
+  ((D_WT / D_DO / D_chl) |
+  (D_TD  / D_H / D_mchl)) +
+  plot_annotation(
+    tag_levels = "A"   # A, B, C
+  )
+
+base_plot
+
+combined_plot <-
+  ggdraw(base_plot) +
+  draw_label(
+    "Structural",
+    x = 0.25, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#452D7A'
+    #fontface = "bold", size = 14
+  ) +
+  draw_label(
+    "Functional",
+    x = 0.75, y = 0.98,
+    hjust = 0.5, vjust = 1, color = '#2E5EAA'
+    #fontface = "bold", size = 14
+  )
+
+combined_plot
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Density_RL.png",
+#   plot = combined_plot,
+#   width = 12,
+#   height = 8,
+#   dpi = 300
+# )
+```
+
+Figure S7
+
+-   Violin plots of daily resilience for all depths of structural and functional variables
+
+```{r}
+#reordering years
+Tutira_D_WT_RR_daily$Year <- factor(Tutira_D_WT_RR_daily$Year, levels = c(2022, 2023, 2024, 2025))
+Tutira_ND_WT_RR_daily$Year <- factor(Tutira_ND_WT_RR_daily$Year, levels = c(2022, 2023, 2024, 2025))
+#Structural
+#WT
+WTV_DRL <- ggplot(Tutira_D_WT_RR_daily%>% filter(Variable == 'TmpWtr', Year %in% c(2022,2023,2024,2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Water Temperature",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  #scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  #scale_x_discrete(labels = c(TmpWtr = "Water Temperature"))+
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+WTV_DRL
+#DO
+DOV_DRL <- ggplot(Tutira_D_WT_RR_daily%>% filter(Variable %in% 'DOconc', Year %in% c(2022,2023,2024,2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Dissolved Oxygen",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  #scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  #scale_x_discrete(labels = c(DOconc = "Dissolved Oxygen"))+
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+DOV_DRL
+#WT
+CHV_DRL <- ggplot(Tutira_D_WT_RR_daily%>% filter(Variable == 'FlChlr', Year %in% c(2022,2023,2024,2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Chlorophyll-a",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#452D7A'
+  )+
+  #scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  #scale_x_discrete(labels = c(FlChlr = "Chlorophyll-a"))+
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none')
+CHV_DRL
+
+#Functional
+#thermocline Depth
+TDV_DRL <- ggplot(Tutira_ND_WT_RR_daily%>% filter(Variable == 'thermo.depth', Year %in% c(2022,2023,2024,2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Thermocline Depth",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+TDV_DRL
+
+#Hypoxic Depth
+HDV_DRL <- ggplot(Tutira_ND_WT_RR_daily%>% filter(Variable == 'Anoxic_Depth', Year %in% c(2022,2023,2024,2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Hypoxic Depth",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none', axis.text.x = element_blank())
+HDV_DRL
+
+#Depth of chl peak
+CDV_DRL <- ggplot(Tutira_ND_WT_RR_daily%>% filter(Variable == 'Depth_max_FlChlr', Year %in% c(2022,2023,2024,2025)), aes(x = Year, y = RL_daily, color = Year, fill = Year)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              trim = FALSE,
+              alpha = 0.4) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.15,
+               outlier.shape = 16,
+               outlier.size = 1.5,
+               alpha = 0.8, color = 'black') +
+  annotate(
+    "text",
+    x = '2022',       # x position (adjust based on your RL_daily range)
+    y = -0.98,       # y position (adjust based on density height)
+    label = "Depth of Maximum Chlorophyll-a",
+    hjust = 0,     # right align
+    size = 4,      # text size
+    color = '#2E5EAA'
+  )+
+  scale_y_continuous(limits = c(-1,1.2), breaks = c(-1, -0.5, 0, 0.5, 1))+
+  scale_color_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  scale_fill_manual(breaks = c(2022, 2023, 2024, 2025), values = c("#F4989C", "#7B9E4C", "#7AE5F8",  "#9F74D8")) +
+  labs(x = NULL, y = 'Daily Resilience') +
+  theme_pubr()+
+  theme(legend.position = 'none')
+CDV_DRL
+
+#combine and save
+base_plot <-
+  ((WTV_DRL / DOV_DRL / CHV_DRL) |
+  (TDV_DRL  / HDV_DRL / CDV_DRL)) +
+  plot_annotation(
+    tag_levels = "A"   # A, B, C
+  )
+
+base_plot
+
+combined_plot <-
+  ggdraw(base_plot) +
+  draw_label(
+    "Structural",
+    x = 0.25, y = 0.98,
+    hjust = 0.5, vjust = 1
+    #fontface = "bold", size = 14
+  ) +
+  draw_label(
+    "Functional",
+    x = 0.75, y = 0.98,
+    hjust = 0.5, vjust = 1
+    #fontface = "bold", size = 14
+  )
+
+combined_plot
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Recovery_Resilience_alltime_SS.png",
+#   plot = combined_plot,
+#   width = 12,
+#   height = 8,
+#   dpi = 300
+# )
+```
+
+Figure S8
+
+-   Relationship between days till recovery and resistance for all variables
+
+```{r}
+#Structural
+Tutira_S4 <- Tutira_D_WT_p1%>%
+  mutate(Type = case_when(
+      Variable == 'TmpWtr' ~ "Physical",
+      Variable %in% c('Cond', 'DOconc', 'DOpsat', 'pH', 'SpCond', 'TurbRT') ~ "Chemical",
+      Variable %in% c('FlChlr', 'FlPhyc') ~ "Biological",
+      TRUE ~ NA_character_  # for any other variables
+    ))%>%
+  mutate(Property = 'Structural')
+  
+
+#Functional
+Tutira_F4 <- Tutira_ND_WT_p1%>%
+  mutate(Type = case_when(
+      Variable %in% c('Buoyancy', "lake.number", "Meta_Top", "Meta_Bottom", "schmidt.stability", "thermo.depth") ~ "Physical",
+      Variable == 'Anoxic_Depth' ~ "Chemical",
+      Variable %in% c('Depth_max_FlChlr', 'Depth_max_FlPhyc') ~ "Biological",
+      TRUE ~ NA_character_  # for any other variables
+    ))%>%
+  mutate(Property = 'Functional')
+    
+dtr_RS <- ggplot(data = Tutira_S4, aes(x = RS, y = RTB, color = Type, shape = Property))+
+  geom_point(size = 2)+
+  geom_point(data = Tutira_F4, aes(x = RS, y = RTB, color = Type, shape = Property), size = 2)+
+  scale_color_manual(breaks = c('Physical', 'Chemical', 'Biological'), values = c("#A6262D", "#A626A6", "#4E2294"), name = 'Process') +
+  scale_shape_manual(breaks = c('Structural', 'Functional'), values = c(16, 17), name = 'Type', labels = c("<span style='color:#452D7A'>Structural</span>","<span style='color:#2E5EAA'>Functional</span>")) +
+  xlim(-1,1)+
+  labs(x = 'Resistance', y = 'Days till Recovery')+
+  #guides(color = guide_legend(order = 1), shape = guide_legend(order = 2)) +
+  theme_pubr()+
+  theme(legend.position = 'right', legend.text = element_markdown())
+dtr_RS
+
+# ggsave(
+#   filename = "Draft Paper Graphs/Recovery_daystillrecovery_newcolors.png",
+#   plot = dtr_RS,
+#   width = 6,
+#   height = 4,
+#   dpi = 300
+# )
+```
+
+## Tables
+
+Table S1
+
+-   values from Figure 5
+
+```{r}
+Tutira_Sbox <- Tutira_D_WT_p1%>%
+  filter(!Variable %in% c("SpCond", "DOpsat", 'Cond','pH'))%>%
+  dplyr::select(Variable, Depth, RS) %>%
+  group_by(Variable, Depth)%>%
+  distinct()
+
+Tutira_summary <- Tutira_Sbox %>%
+  group_by(Variable) %>%
+  summarise(
+    n       = sum(!is.na(RS)),
+    mean    = mean(RS, na.rm = TRUE),
+    sd      = sd(RS, na.rm = TRUE),
+    median  = median(RS, na.rm = TRUE),
+    Q1      = quantile(RS, 0.25, na.rm = TRUE),
+    Q3      = quantile(RS, 0.75, na.rm = TRUE),
+    IQR     = IQR(RS, na.rm = TRUE),
+    min     = min(RS, na.rm = TRUE),
+    max     = max(RS, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+### Table S2
+
+-   values from Figure 8
+
+```{r}
+Tutira_S5 <- Tutira_D_WT_RR_daily%>%
+  filter(Depth == 1)%>%
+  dplyr::select(Date, Variable,Year, RL_daily)%>%
+  group_by(Date, Variable, Year)%>%
+  distinct() %>%
+  filter(Year %in% c(2022,2023,2024,2025))
+
+Tutira_F5 <- Tutira_ND_WT_RR_daily%>%
+  dplyr::select(Date, Variable,Year, RL_daily)%>%
+  group_by(Date, Variable, Year)%>%
+  distinct() %>%
+  # dplyr::summarise_at(vars(RL_daily),mean,na.rm=TRUE)%>%
+  # ungroup()%>%
+  filter(Year %in% c(2022,2023,2024,2025))
+
+# 1 m data
+Tutira_all <- bind_rows(
+  Tutira_S5,
+  Tutira_F5
+) 
+
+Tutira_summary <- Tutira_all %>%
+  group_by(Variable, Year) %>%
+  summarise(
+    n       = sum(!is.na(RL_daily)),
+    mean    = mean(RL_daily, na.rm = TRUE),
+    sd      = sd(RL_daily, na.rm = TRUE),
+    median  = median(RL_daily, na.rm = TRUE),
+    Q1      = quantile(RL_daily, 0.25, na.rm = TRUE),
+    Q3      = quantile(RL_daily, 0.75, na.rm = TRUE),
+    IQR     = IQR(RL_daily, na.rm = TRUE),
+    min     = min(RL_daily, na.rm = TRUE),
+    max     = max(RL_daily, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# all depths
+Tutira_all_Depth <- bind_rows(
+  Tutira_D_WT_RR_daily %>% dplyr::select(Variable, Year, Depth, RL_daily),
+  Tutira_ND_WT_RR_daily %>% dplyr::select(Variable, Year, RL_daily)
+) %>%
+  filter(Year %in% c(2022, 2023, 2024, 2025))
+
+Tutira_summary_Depth <- Tutira_all_Depth %>%
+  group_by(Variable, Year, Depth) %>%
+  summarise(
+    n       = sum(!is.na(RL_daily)),
+    mean    = mean(RL_daily, na.rm = TRUE),
+    sd      = sd(RL_daily, na.rm = TRUE),
+    median  = median(RL_daily, na.rm = TRUE),
+    Q1      = quantile(RL_daily, 0.25, na.rm = TRUE),
+    Q3      = quantile(RL_daily, 0.75, na.rm = TRUE),
+    IQR     = IQR(RL_daily, na.rm = TRUE),
+    min     = min(RL_daily, na.rm = TRUE),
+    max     = max(RL_daily, na.rm = TRUE),
+    .groups = "drop"
+  )
 ```
