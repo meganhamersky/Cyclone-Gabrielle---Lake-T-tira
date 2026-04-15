@@ -1737,13 +1737,13 @@ RS_Box <- Tutira_D_WT_p1%>%
   theme(axis.text.x = element_text(color = '#452D7A'))
 RS_Box
 
-ggsave(
-  filename = "Draft Paper Graphs/RS_S_Box_colors_updated_colors.png",
-  plot = RS_Box,
-  width = 8, #14
-  height = 4, #7
-  dpi = 300
-)
+# ggsave(
+#   filename = "Draft Paper Graphs/RS_S_Box_colors_updated_colors.png",
+#   plot = RS_Box,
+#   width = 8, #14
+#   height = 4, #7
+#   dpi = 300
+# )
 ```
 
 ## Figure 6
@@ -2486,16 +2486,16 @@ combined_plot <-
 
 combined_plot
 
-ggsave(
-  filename = "Draft Paper Graphs/Recovery_Resilience_alltime_violin_nolimits_newcolors_nl_updated.png",
-  plot = combined_plot,
-  width = 12,
-  height = 8,
-  dpi = 300
-)
+# ggsave(
+#   filename = "Draft Paper Graphs/Recovery_Resilience_alltime_violin_nolimits_newcolors_nl_updated.png",
+#   plot = combined_plot,
+#   width = 12,
+#   height = 8,
+#   dpi = 300
+# )
 ```
 
-# Supplementary 
+# Supplementary
 
 ## Figures
 
@@ -3847,7 +3847,7 @@ dtr_RS
 
 ## Tables
 
-Table S1
+### Table S1
 
 -   values from Figure 5
 
